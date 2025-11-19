@@ -282,4 +282,4 @@ For pgAdmin connection, parse the connection string:
 
 ## 📄 License
 
-MIT
+DuyLaam
