@@ -9,23 +9,30 @@ import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import type { StringValue } from 'ms';
 import * as bcrypt from 'bcrypt';
+import { OAuth2Client } from 'google-auth-library';
 import { User } from '../../entities/user.entity';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import { CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 
 @Injectable()
 export class AuthService {
   private refreshTokenPromises: Map<string, Promise<{ accessToken: string }>> = new Map();
+  private googleClient: OAuth2Client;
 
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
     private jwtService: JwtService,
     private configService: ConfigService,
-  ) {}
+  ) {
+    this.googleClient = new OAuth2Client(
+      this.configService.get<string>('GOOGLE_CLIENT_ID'),
+    );
+  }
 
   async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
     // Check if user already exists
@@ -167,9 +174,51 @@ export class AuthService {
     return this.userRepository.findOne({ where: { id: userId } });
   }
 
-  async googleLogin(googleToken: string): Promise<AuthResponseDto> {
-    // Placeholder for Google OAuth - returns 501
-    throw new BadRequestException('Google OAuth not implemented yet');
+  async googleLogin(googleLoginDto: GoogleLoginDto): Promise<AuthResponseDto> {
+    try {
+      // Verify Google token
+      const ticket = await this.googleClient.verifyIdToken({
+        idToken: googleLoginDto.token,
+        audience: this.configService.get<string>('GOOGLE_CLIENT_ID'),
+      });
+
+      const payload = ticket.getPayload();
+      if (!payload) {
+        throw new UnauthorizedException('Invalid Google token');
+      }
+
+      const { sub: googleId, email, name } = payload;
+
+      // Find or create user
+      let user = await this.userRepository.findOne({
+        where: [{ googleId }, { email }],
+      });
+
+      if (user) {
+        // Update Google info if not set
+        if (!user.googleId) {
+          user.googleId = googleId;
+          await this.userRepository.save(user);
+        }
+      } else {
+        // Create new user from Google account
+        user = this.userRepository.create({
+          email,
+          name: name || '',
+          googleId,
+          password: null, // No password for Google accounts
+        });
+        await this.userRepository.save(user);
+      }
+
+      // Generate tokens
+      return this.generateTokens(user);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new BadRequestException('Google authentication failed');
+    }
   }
 }
 

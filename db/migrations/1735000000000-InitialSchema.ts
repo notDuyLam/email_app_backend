@@ -23,12 +23,19 @@ export class InitialSchema1735000000000 implements MigrationInterface {
             name: 'password',
             type: 'varchar',
             length: '255',
+            isNullable: true,
           },
           {
             name: 'name',
             type: 'varchar',
             length: '255',
             isNullable: true,
+          },
+          {
+            name: 'googleId',
+            type: 'varchar',
+            isNullable: true,
+            isUnique: true,
           },
           {
             name: 'createdAt',

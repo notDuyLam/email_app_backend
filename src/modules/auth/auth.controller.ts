@@ -4,7 +4,6 @@ import {
   Body,
   HttpCode,
   HttpStatus,
-  NotImplementedException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -17,6 +16,7 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 
 @ApiTags('auth')
@@ -96,11 +96,17 @@ export class AuthController {
   }
 
   @Post('google')
-  @HttpCode(HttpStatus.NOT_IMPLEMENTED)
-  @ApiOperation({ summary: 'Google OAuth login (Not implemented)' })
-  @ApiResponse({ status: 501, description: 'Not implemented' })
-  async googleLogin(@Body() body: { credential: string }) {
-    throw new NotImplementedException('Google OAuth not implemented yet');
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Google OAuth login' })
+  @ApiBody({ type: GoogleLoginDto })
+  @ApiResponse({
+    status: 200,
+    description: 'User successfully logged in with Google',
+    type: AuthResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Invalid Google token' })
+  async googleLogin(@Body() googleLoginDto: GoogleLoginDto) {
+    return this.authService.googleLogin(googleLoginDto);
   }
 }
 
