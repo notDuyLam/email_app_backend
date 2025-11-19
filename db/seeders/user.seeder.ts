@@ -41,7 +41,7 @@ async function seedUsers() {
     }
 
     // Hash password
-    const hashedPassword = await bcrypt.hash('123', 10);
+    const hashedPassword = await bcrypt.hash('123123', 10);
 
     // Users to seed
     const users = [

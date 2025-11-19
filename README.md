@@ -1,5 +1,7 @@
 # Email App Backend
 
+Deployment domain: 'https://email-app-backend-ecru.vercel.app'
+
 Backend API for Email App with JWT Authentication, built with NestJS.
 
 ## 🚀 Features
