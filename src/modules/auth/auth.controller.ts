@@ -1,16 +1,24 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
+  Query,
+  Res,
+  UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { Response } from 'express';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBody,
   ApiBearerAuth,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -75,8 +83,10 @@ export class AuthController {
   }
 
   @Post('logout')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Logout user' })
+  @ApiBearerAuth('JWT-auth')
   @ApiResponse({
     status: 200,
     description: 'User successfully logged out',
@@ -90,8 +100,10 @@ export class AuthController {
       },
     },
   })
-  async logout() {
-    // Frontend handles token clearing
+  async logout(@CurrentUser() user?: CurrentUserPayload) {
+    if (user?.userId) {
+      await this.authService.logout(user.userId);
+    }
     return { message: 'Logged out successfully' };
   }
 
@@ -107,6 +119,33 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Invalid Google token' })
   async googleLogin(@Body() googleLoginDto: GoogleLoginDto) {
     return this.authService.googleLogin(googleLoginDto);
+  }
+
+  @Get('google/authorize')
+  @ApiOperation({ summary: 'Redirect to Google OAuth consent screen for Gmail' })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirects to Google OAuth consent screen',
+  })
+  async googleAuthorize(@Res() res: Response) {
+    const authUrl = await this.authService.getGmailAuthUrl();
+    res.redirect(authUrl);
+  }
+
+  @Get('google/callback')
+  @ApiOperation({ summary: 'Handle Google OAuth callback for Gmail' })
+  @ApiQuery({ name: 'code', required: false, description: 'Authorization code from Google' })
+  @ApiQuery({ name: 'error', required: false, description: 'Error from OAuth flow' })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirects to frontend with tokens or error',
+  })
+  async googleCallback(
+    @Query('code') code: string,
+    @Query('error') error: string,
+    @Res() res: Response,
+  ) {
+    return this.authService.handleGmailCallback(code, error, res);
   }
 }
 

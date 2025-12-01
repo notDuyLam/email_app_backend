@@ -9,6 +9,7 @@ import { AuthService } from './auth.service';
 import { User } from '../../entities/user.entity';
 import { JwtStrategy } from '../../common/strategies/jwt.strategy';
 import jwtConfig from '../../configs/jwt.config';
+import { GmailModule } from '../gmail/gmail.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import jwtConfig from '../../configs/jwt.config';
       inject: [ConfigService],
     }),
     ConfigModule.forFeature(jwtConfig),
+    GmailModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

@@ -4,15 +4,18 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './modules/auth/auth.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
+import { GmailModule } from './modules/gmail/gmail.module';
 import { User } from './entities/user.entity';
+import { GmailToken } from './entities/gmail-token.entity';
 import appConfig from './configs/app.config';
 import jwtConfig from './configs/jwt.config';
+import gmailConfig from './configs/gmail.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, jwtConfig],
+      load: [appConfig, jwtConfig, gmailConfig],
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
@@ -33,7 +36,7 @@ import jwtConfig from './configs/jwt.config';
             username: decodeURIComponent(url.username),
             password: decodeURIComponent(url.password),
             database: url.pathname.slice(1), // Remove leading '/'
-            entities: [User],
+            entities: [User, GmailToken],
             synchronize: false,
             logging: configService.get<string>('NODE_ENV') === 'development',
             ssl: sslMode === 'require' ? { rejectUnauthorized: false } : false,
@@ -48,7 +51,7 @@ import jwtConfig from './configs/jwt.config';
           username: configService.get<string>('DB_USERNAME') || 'postgres',
           password: configService.get<string>('DB_PASSWORD') || 'postgres',
           database: configService.get<string>('DB_DATABASE') || 'email_app_db',
-          entities: [User],
+          entities: [User, GmailToken],
           synchronize: false,
           logging: configService.get<string>('NODE_ENV') === 'development',
         };
@@ -58,6 +61,7 @@ import jwtConfig from './configs/jwt.config';
     AuthModule,
     EmailModule,
     HealthModule,
+    GmailModule,
   ],
 })
 export class AppModule {}

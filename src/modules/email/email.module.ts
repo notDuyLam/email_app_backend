@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
-import { EmailController, EmailDetailController } from './email.controller';
+import { EmailController, EmailDetailController, AttachmentController } from './email.controller';
 import { EmailService } from './email.service';
+import { GmailModule } from '../gmail/gmail.module';
 
 @Module({
-  controllers: [EmailController, EmailDetailController],
+  imports: [GmailModule],
+  controllers: [EmailController, EmailDetailController, AttachmentController],
   providers: [EmailService],
   exports: [EmailService],
 })
