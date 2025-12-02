@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -22,6 +23,7 @@ import { GmailService } from '../gmail/gmail.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private refreshTokenPromises: Map<string, Promise<{ accessToken: string }>> = new Map();
   private googleClient: OAuth2Client;
 
@@ -209,12 +211,11 @@ export class AuthService {
           email,
           name: name || '',
           googleId,
-          password: null, // No password for Google accounts
+          password: null,
         });
         await this.userRepository.save(user);
       }
 
-      // Generate tokens
       return this.generateTokens(user);
     } catch (error) {
       if (error instanceof UnauthorizedException) {
@@ -246,11 +247,9 @@ export class AuthService {
     }
 
     try {
-      // Exchange code for tokens
       const { refreshToken, accessToken, expiryDate, userInfo } =
         await this.gmailService.handleCallback(code);
 
-      // Find or create user
       let user = await this.userRepository.findOne({
         where: { email: userInfo.email },
       });
@@ -264,14 +263,12 @@ export class AuthService {
         });
         await this.userRepository.save(user);
       } else {
-        // Update Google ID if not set
         if (!user.googleId) {
           user.googleId = userInfo.sub;
           await this.userRepository.save(user);
         }
       }
 
-      // Save Gmail tokens
       await this.gmailService.saveToken(
         user.id,
         refreshToken,
@@ -283,11 +280,14 @@ export class AuthService {
       const { accessToken: appAccessToken, refreshToken: appRefreshToken } =
         this.generateTokens(user);
 
+      this.logger.log('Redirecting to frontend with tokens...');
       // Redirect to frontend with tokens
       res.redirect(
         `${frontendUrl}/auth/callback?accessToken=${appAccessToken}&refreshToken=${appRefreshToken}`,
       );
     } catch (error) {
+      this.logger.error('Failed to handle Gmail callback:', error.message);
+      this.logger.error(error.stack);
       res.redirect(`${frontendUrl}/login?error=oauth_failed`);
     }
   }
@@ -298,7 +298,6 @@ export class AuthService {
   }
 
   async logout(userId: number): Promise<void> {
-    // Revoke Gmail tokens if connected
     const hasGmail = await this.hasGmailConnected(userId);
     if (hasGmail) {
       await this.gmailService.revokeToken(userId);

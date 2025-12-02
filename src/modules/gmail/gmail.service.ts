@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -13,6 +14,7 @@ import { GmailToken } from '../../entities/gmail-token.entity';
 
 @Injectable()
 export class GmailService {
+  private readonly logger = new Logger(GmailService.name);
   private refreshPromises: Map<number, Promise<string>> = new Map();
   private oauth2Client: OAuth2Client;
 
@@ -60,26 +62,42 @@ export class GmailService {
         throw new BadRequestException('No refresh token received from Google');
       }
 
-      // Get user info from access token
-      this.oauth2Client.setCredentials(tokens);
-      const oauth2 = google.oauth2({ version: 'v2', auth: this.oauth2Client });
-      const userInfoResponse = await oauth2.userinfo.get();
+      if (!tokens.access_token) {
+        throw new BadRequestException('No access token received from Google');
+      }
 
-      if (!userInfoResponse.data.email) {
-        throw new BadRequestException('Unable to retrieve user email from Google');
+      // Use Gmail API to get user email
+      const tempOAuth2Client = new OAuth2Client(
+        this.configService.get<string>('gmail.clientId'),
+        this.configService.get<string>('gmail.clientSecret'),
+        this.configService.get<string>('gmail.redirectUri')
+      );
+      tempOAuth2Client.setCredentials({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      });
+      
+      const gmail = google.gmail({ version: 'v1', auth: tempOAuth2Client });
+      const profile = await gmail.users.getProfile({ userId: 'me' });
+
+      const email = profile.data.emailAddress;
+      
+      if (!email) {
+        throw new BadRequestException('Unable to retrieve user email from Gmail profile');
       }
 
       return {
         refreshToken: tokens.refresh_token,
-        accessToken: tokens.access_token || '',
+        accessToken: tokens.access_token,
         expiryDate: tokens.expiry_date,
         userInfo: {
-          email: userInfoResponse.data.email,
-          name: userInfoResponse.data.name,
-          sub: userInfoResponse.data.id || '',
+          email: email,
+          name: email.split('@')[0],
+          sub: email,
         },
       };
     } catch (error) {
+      this.logger.error(`Failed to handle OAuth callback: ${error.message}`);
       if (error instanceof BadRequestException) {
         throw error;
       }
