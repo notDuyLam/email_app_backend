@@ -2,11 +2,13 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
+import { Response } from 'express';
 import type { StringValue } from 'ms';
 import * as bcrypt from 'bcrypt';
 import { OAuth2Client } from 'google-auth-library';
@@ -17,9 +19,11 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { GmailService } from '../gmail/gmail.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private refreshTokenPromises: Map<string, Promise<{ accessToken: string }>> = new Map();
   private googleClient: OAuth2Client;
 
@@ -28,6 +32,7 @@ export class AuthService {
     private userRepository: Repository<User>,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private gmailService: GmailService,
   ) {
     this.googleClient = new OAuth2Client(
       this.configService.get<string>('GOOGLE_CLIENT_ID'),
@@ -206,18 +211,96 @@ export class AuthService {
           email,
           name: name || '',
           googleId,
-          password: null, // No password for Google accounts
+          password: null,
         });
         await this.userRepository.save(user);
       }
 
-      // Generate tokens
       return this.generateTokens(user);
     } catch (error) {
       if (error instanceof UnauthorizedException) {
         throw error;
       }
       throw new BadRequestException('Google authentication failed');
+    }
+  }
+
+  async getGmailAuthUrl(): Promise<string> {
+    return this.gmailService.getAuthUrl();
+  }
+
+  async handleGmailCallback(
+    code: string | undefined,
+    error: string | undefined,
+    res: Response,
+  ): Promise<void> {
+    const frontendUrl = this.configService.get<string>('gmail.frontendUrl') || 'http://localhost:5173';
+
+    if (error) {
+      res.redirect(`${frontendUrl}/login?error=access_denied`);
+      return;
+    }
+
+    if (!code) {
+      res.redirect(`${frontendUrl}/login?error=no_code`);
+      return;
+    }
+
+    try {
+      const { refreshToken, accessToken, expiryDate, userInfo } =
+        await this.gmailService.handleCallback(code);
+
+      let user = await this.userRepository.findOne({
+        where: { email: userInfo.email },
+      });
+
+      if (!user) {
+        user = this.userRepository.create({
+          email: userInfo.email,
+          name: userInfo.name || '',
+          googleId: userInfo.sub,
+          password: null,
+        });
+        await this.userRepository.save(user);
+      } else {
+        if (!user.googleId) {
+          user.googleId = userInfo.sub;
+          await this.userRepository.save(user);
+        }
+      }
+
+      await this.gmailService.saveToken(
+        user.id,
+        refreshToken,
+        accessToken,
+        expiryDate,
+      );
+
+      // Generate app session tokens
+      const { accessToken: appAccessToken, refreshToken: appRefreshToken } =
+        this.generateTokens(user);
+
+      this.logger.log('Redirecting to frontend with tokens...');
+      // Redirect to frontend with tokens
+      res.redirect(
+        `${frontendUrl}/auth/callback?accessToken=${appAccessToken}&refreshToken=${appRefreshToken}`,
+      );
+    } catch (error) {
+      this.logger.error('Failed to handle Gmail callback:', error.message);
+      this.logger.error(error.stack);
+      res.redirect(`${frontendUrl}/login?error=oauth_failed`);
+    }
+  }
+
+  async hasGmailConnected(userId: number): Promise<boolean> {
+    const token = await this.gmailService.getStoredToken(userId);
+    return token !== null && token.isActive;
+  }
+
+  async logout(userId: number): Promise<void> {
+    const hasGmail = await this.hasGmailConnected(userId);
+    if (hasGmail) {
+      await this.gmailService.revokeToken(userId);
     }
   }
 }
