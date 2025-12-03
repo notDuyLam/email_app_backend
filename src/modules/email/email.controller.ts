@@ -152,6 +152,36 @@ export class EmailDetailController {
     return { message: 'Email modified successfully' };
   }
 
+  @Post(':id/read')
+  @ApiOperation({ summary: 'Mark email as read' })
+  @ApiParam({ name: 'id', description: 'Email ID', example: '18c1234567890abcdef' })
+  @ApiResponse({
+    status: 200,
+    description: 'Email marked as read successfully',
+  })
+  async markAsRead(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') emailId: string,
+  ) {
+    await this.emailService.markAsRead(user.userId, emailId);
+    return { message: 'Email marked as read successfully' };
+  }
+
+  @Post(':id/unread')
+  @ApiOperation({ summary: 'Mark email as unread' })
+  @ApiParam({ name: 'id', description: 'Email ID', example: '18c1234567890abcdef' })
+  @ApiResponse({
+    status: 200,
+    description: 'Email marked as unread successfully',
+  })
+  async markAsUnread(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') emailId: string,
+  ) {
+    await this.emailService.markAsUnread(user.userId, emailId);
+    return { message: 'Email marked as unread successfully' };
+  }
+
   @Post(':id/delete')
   @ApiOperation({ summary: 'Delete an email (move to trash or permanently delete)' })
   @ApiParam({ name: 'id', description: 'Email ID', example: '18c1234567890abcdef' })

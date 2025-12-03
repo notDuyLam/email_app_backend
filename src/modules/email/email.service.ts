@@ -131,6 +131,16 @@ export class EmailService {
     );
   }
 
+  async markAsRead(userId: number, emailId: string): Promise<void> {
+    // Remove UNREAD label to mark as read
+    await this.gmailService.modifyEmail(userId, emailId, [], ['UNREAD']);
+  }
+
+  async markAsUnread(userId: number, emailId: string): Promise<void> {
+    // Add UNREAD label to mark as unread
+    await this.gmailService.modifyEmail(userId, emailId, ['UNREAD'], []);
+  }
+
   async deleteEmail(userId: number, emailId: string, permanent: boolean = false): Promise<void> {
     await this.gmailService.deleteEmail(userId, emailId, permanent);
   }
