@@ -13,5 +13,6 @@ export class EmailListResponseDto {
   total: number;
   page: number;
   pageSize: number;
+  nextPageToken?: string;
 }
 

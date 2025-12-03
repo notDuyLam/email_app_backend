@@ -25,11 +25,13 @@ export class EmailService {
     mailboxId: string,
     page: number = 1,
     pageSize: number = 20,
+    search?: string,
+    pageToken?: string,
   ): Promise<EmailListResponseDto> {
     // Calculate pageToken for pagination (Gmail uses pageToken, not page numbers)
     // For simplicity, we'll fetch from the beginning and use pageToken from previous calls
     // In a real implementation, you'd store pageToken in the frontend
-    const result = await this.gmailService.getEmails(userId, mailboxId, page, pageSize);
+    const result = await this.gmailService.getEmails(userId, mailboxId, page, pageSize, pageToken, search);
 
     // Fetch details for each message to get full info
     const emailDetails = await Promise.all(
@@ -65,6 +67,7 @@ export class EmailService {
       total: result.total,
       page,
       pageSize,
+      nextPageToken: result.nextPageToken,
     };
   }
 

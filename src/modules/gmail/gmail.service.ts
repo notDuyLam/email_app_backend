@@ -395,6 +395,7 @@ export class GmailService {
     page: number = 1,
     pageSize: number = 20,
     pageToken?: string,
+    search?: string,
   ): Promise<{
     messages: Array<{ id: string; threadId: string }>;
     nextPageToken?: string;
@@ -402,11 +403,19 @@ export class GmailService {
   }> {
     try {
       const gmail = await this.createGmailClient(userId);
+      
+      // Build query for search
+      let q = `in:${labelId.toLowerCase()}`;
+      if (search && search.trim()) {
+        q = `${search} ${q}`;
+      }
+      
       const response = await gmail.users.messages.list({
         userId: 'me',
         labelIds: [labelId],
         maxResults: pageSize,
         pageToken: pageToken,
+        q: search && search.trim() ? q : undefined,
       });
 
       return {
@@ -421,11 +430,19 @@ export class GmailService {
       if (error.code === 401) {
         await this.getAccessToken(userId);
         const gmail = await this.createGmailClient(userId);
+        
+        // Build query for search on retry
+        let q = `in:${labelId.toLowerCase()}`;
+        if (search && search.trim()) {
+          q = `${search} ${q}`;
+        }
+        
         const response = await gmail.users.messages.list({
           userId: 'me',
           labelIds: [labelId],
           maxResults: pageSize,
           pageToken: pageToken,
+          q: search && search.trim() ? q : undefined,
         });
         return {
           messages: (response.data.messages || []).map((msg) => ({
@@ -492,7 +509,7 @@ export class GmailService {
         cc: ccAddresses,
         subject: headers.subject,
         receivedDate: new Date(parseInt(message.internalDate || '0', 10)),
-        body: body.text || body.html || '',
+        body: body.html || body.text || '',
         html: body.html || undefined,
         attachments: attachments.map((att) => ({
           id: att.id,

@@ -50,6 +50,8 @@ export class EmailController {
   @ApiParam({ name: 'id', description: 'Mailbox ID', example: 'INBOX' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 20 })
+  @ApiQuery({ name: 'search', required: false, type: String, example: 'important meeting' })
+  @ApiQuery({ name: 'pageToken', required: false, type: String, example: '' })
   @ApiResponse({
     status: 200,
     description: 'Emails retrieved successfully',
@@ -60,8 +62,10 @@ export class EmailController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('pageSize', new DefaultValuePipe(20), ParseIntPipe)
     pageSize: number,
+    @Query('search') search?: string,
+    @Query('pageToken') pageToken?: string,
   ) {
-    return this.emailService.getEmailsByMailbox(user.userId, mailboxId, page, pageSize);
+    return this.emailService.getEmailsByMailbox(user.userId, mailboxId, page, pageSize, search, pageToken);
   }
 }
 
