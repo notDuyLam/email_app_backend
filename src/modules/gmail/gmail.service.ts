@@ -614,21 +614,64 @@ export class GmailService {
         throw new UnauthorizedException('Gmail not connected');
       }
 
-      // For now, we'll use a simple approach. For attachments, we'd need to use nodemailer or build MIME manually
-      const messageLines: string[] = [];
-      messageLines.push(`To: ${to.join(', ')}`);
-      if (cc && cc.length > 0) {
-        messageLines.push(`Cc: ${cc.join(', ')}`);
-      }
-      if (bcc && bcc.length > 0) {
-        messageLines.push(`Bcc: ${bcc.join(', ')}`);
-      }
-      messageLines.push(`Subject: ${subject}`);
-      messageLines.push('Content-Type: text/html; charset=utf-8');
-      messageLines.push('');
-      messageLines.push(body);
+      let message: string;
 
-      const message = messageLines.join('\n');
+      if (attachments && attachments.length > 0) {
+        // Create multipart message with attachments
+        const boundary = `boundary_${Date.now()}`;
+        const messageLines: string[] = [];
+        
+        messageLines.push(`To: ${to.join(', ')}`);
+        if (cc && cc.length > 0) {
+          messageLines.push(`Cc: ${cc.join(', ')}`);
+        }
+        if (bcc && bcc.length > 0) {
+          messageLines.push(`Bcc: ${bcc.join(', ')}`);
+        }
+        messageLines.push(`Subject: ${subject}`);
+        messageLines.push(`MIME-Version: 1.0`);
+        messageLines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+        messageLines.push('');
+        
+        // Add body part
+        messageLines.push(`--${boundary}`);
+        messageLines.push('Content-Type: text/html; charset=utf-8');
+        messageLines.push('Content-Transfer-Encoding: base64');
+        messageLines.push('');
+        messageLines.push(Buffer.from(body).toString('base64'));
+        messageLines.push('');
+        
+        // Add attachment parts
+        for (const attachment of attachments) {
+          messageLines.push(`--${boundary}`);
+          messageLines.push(`Content-Type: ${attachment.mimeType}`);
+          messageLines.push(`Content-Disposition: attachment; filename="${attachment.filename}"`);
+          messageLines.push('Content-Transfer-Encoding: base64');
+          messageLines.push('');
+          // Content should already be base64 from frontend
+          messageLines.push(attachment.content);
+          messageLines.push('');
+        }
+        
+        messageLines.push(`--${boundary}--`);
+        message = messageLines.join('\n');
+      } else {
+        // Simple message without attachments
+        const messageLines: string[] = [];
+        messageLines.push(`To: ${to.join(', ')}`);
+        if (cc && cc.length > 0) {
+          messageLines.push(`Cc: ${cc.join(', ')}`);
+        }
+        if (bcc && bcc.length > 0) {
+          messageLines.push(`Bcc: ${bcc.join(', ')}`);
+        }
+        messageLines.push(`Subject: ${subject}`);
+        messageLines.push('Content-Type: text/html; charset=utf-8');
+        messageLines.push('');
+        messageLines.push(body);
+        message = messageLines.join('\n');
+      }
+
       const encodedMessage = this.encodeMessage(message);
 
       const response = await gmail.users.messages.send({
