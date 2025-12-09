@@ -7,6 +7,7 @@ import { HealthModule } from './modules/health/health.module';
 import { GmailModule } from './modules/gmail/gmail.module';
 import { User } from './entities/user.entity';
 import { GmailToken } from './entities/gmail-token.entity';
+import { EmailStatus } from './entities/email-status.entity';
 import appConfig from './configs/app.config';
 import jwtConfig from './configs/jwt.config';
 import gmailConfig from './configs/gmail.config';
@@ -36,7 +37,7 @@ import gmailConfig from './configs/gmail.config';
             username: decodeURIComponent(url.username),
             password: decodeURIComponent(url.password),
             database: url.pathname.slice(1), // Remove leading '/'
-            entities: [User, GmailToken],
+            entities: [User, GmailToken, EmailStatus],
             synchronize: false,
             logging: configService.get<string>('NODE_ENV') === 'development',
             ssl: sslMode === 'require' ? { rejectUnauthorized: false } : false,

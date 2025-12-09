@@ -1,15 +1,23 @@
 import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In } from 'typeorm';
 import { GmailService } from '../gmail/gmail.service';
+import { EmailStatus, KanbanStatus } from '../../entities/email-status.entity';
 import { MailboxDto } from './dto/mailbox.dto';
 import { EmailListResponseDto, EmailListItemDto } from './dto/email-list.dto';
 import { EmailDetailDto } from './dto/email-detail.dto';
 import { SendEmailDto } from './dto/send-email.dto';
 import { ReplyEmailDto } from './dto/reply-email.dto';
 import { ModifyEmailDto } from './dto/modify-email.dto';
+import { EmailStatusResponseDto } from './dto/email-status-response.dto';
 
 @Injectable()
 export class EmailService {
-  constructor(private readonly gmailService: GmailService) {}
+  constructor(
+    private readonly gmailService: GmailService,
+    @InjectRepository(EmailStatus)
+    private readonly emailStatusRepository: Repository<EmailStatus>,
+  ) {}
 
   async getMailboxes(userId: number): Promise<MailboxDto[]> {
     const mailboxes = await this.gmailService.getMailboxes(userId);
@@ -151,6 +159,82 @@ export class EmailService {
     attachmentId: string,
   ): Promise<{ data: Buffer; mimeType: string; filename: string }> {
     return this.gmailService.getAttachment(userId, messageId, attachmentId);
+  }
+
+  async getEmailStatus(userId: number, emailId: string): Promise<EmailStatusResponseDto> {
+    const emailStatus = await this.emailStatusRepository.findOne({
+      where: { userId, emailId },
+    });
+
+    return {
+      emailId,
+      status: emailStatus?.status || KanbanStatus.INBOX,
+      updatedAt: emailStatus?.updatedAt || new Date(),
+    };
+  }
+
+  async updateEmailStatus(
+    userId: number,
+    emailId: string,
+    status: KanbanStatus,
+  ): Promise<EmailStatusResponseDto> {
+    let emailStatus = await this.emailStatusRepository.findOne({
+      where: { userId, emailId },
+    });
+
+    if (emailStatus) {
+      emailStatus.status = status;
+      emailStatus = await this.emailStatusRepository.save(emailStatus);
+    } else {
+      emailStatus = this.emailStatusRepository.create({
+        userId,
+        emailId,
+        status,
+      });
+      emailStatus = await this.emailStatusRepository.save(emailStatus);
+    }
+
+    return {
+      emailId: emailStatus.emailId,
+      status: emailStatus.status,
+      updatedAt: emailStatus.updatedAt,
+    };
+  }
+
+  async getBulkEmailStatuses(
+    userId: number,
+    emailIds: string[],
+  ): Promise<EmailStatusResponseDto[]> {
+    if (emailIds.length === 0) {
+      return [];
+    }
+
+    const emailStatuses = await this.emailStatusRepository.find({
+      where: {
+        userId,
+        emailId: In(emailIds),
+      },
+    });
+
+    // Create a map for quick lookup
+    const statusMap = new Map<string, EmailStatus>();
+    emailStatuses.forEach((status) => {
+      statusMap.set(status.emailId, status);
+    });
+
+    // Return statuses for all requested emails, defaulting to INBOX
+    return emailIds.map((emailId) => {
+      const emailStatus = statusMap.get(emailId);
+      return {
+        emailId,
+        status: emailStatus?.status || KanbanStatus.INBOX,
+        updatedAt: emailStatus?.updatedAt || new Date(),
+      };
+    });
+  }
+
+  async deleteEmailStatus(userId: number, emailId: string): Promise<void> {
+    await this.emailStatusRepository.delete({ userId, emailId });
   }
 
   private extractNameFromEmail(email: string): string {

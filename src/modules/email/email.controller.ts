@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Param,
   Query,
   Body,
@@ -27,6 +28,8 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 import { SendEmailDto } from './dto/send-email.dto';
 import { ReplyEmailDto } from './dto/reply-email.dto';
 import { ModifyEmailDto } from './dto/modify-email.dto';
+import { UpdateEmailStatusDto } from './dto/update-email-status.dto';
+import { BulkEmailStatusRequestDto } from './dto/email-status-response.dto';
 
 @ApiTags('mailboxes')
 @ApiBearerAuth('JWT-auth')
@@ -182,6 +185,20 @@ export class EmailDetailController {
     return { message: 'Email marked as unread successfully' };
   }
 
+  @Post('bulk-status')
+  @ApiOperation({ summary: 'Get kanban statuses for multiple emails' })
+  @ApiBody({ type: BulkEmailStatusRequestDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Email statuses retrieved successfully',
+  })
+  async getBulkEmailStatuses(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() bulkRequest: BulkEmailStatusRequestDto,
+  ) {
+    return this.emailService.getBulkEmailStatuses(user.userId, bulkRequest.emailIds);
+  }
+
   @Post(':id/delete')
   @ApiOperation({ summary: 'Delete an email (move to trash or permanently delete)' })
   @ApiParam({ name: 'id', description: 'Email ID', example: '18c1234567890abcdef' })
@@ -197,6 +214,36 @@ export class EmailDetailController {
   ) {
     await this.emailService.deleteEmail(user.userId, emailId, permanent);
     return { message: 'Email deleted successfully' };
+  }
+
+  @Get(':id/status')
+  @ApiOperation({ summary: 'Get email kanban status' })
+  @ApiParam({ name: 'id', description: 'Email ID', example: '18c1234567890abcdef' })
+  @ApiResponse({
+    status: 200,
+    description: 'Email status retrieved successfully',
+  })
+  async getEmailStatus(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') emailId: string,
+  ) {
+    return this.emailService.getEmailStatus(user.userId, emailId);
+  }
+
+  @Put(':id/status')
+  @ApiOperation({ summary: 'Update email kanban status' })
+  @ApiParam({ name: 'id', description: 'Email ID', example: '18c1234567890abcdef' })
+  @ApiBody({ type: UpdateEmailStatusDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Email status updated successfully',
+  })
+  async updateEmailStatus(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') emailId: string,
+    @Body() updateDto: UpdateEmailStatusDto,
+  ) {
+    return this.emailService.updateEmailStatus(user.userId, emailId, updateDto.status);
   }
 }
 
