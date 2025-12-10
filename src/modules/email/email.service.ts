@@ -229,12 +229,20 @@ export class EmailService {
 
     if (emailStatus) {
       emailStatus.status = status;
+      // Clear snoozeUntil when moving OUT of SNOOZED status
+      if (status !== KanbanStatus.SNOOZED && emailStatus.snoozeUntil) {
+        this.logger.log(
+          `[UPDATE_STATUS] Clearing snoozeUntil for email ${emailId} (moving from SNOOZED to ${status})`,
+        );
+        emailStatus.snoozeUntil = null;
+      }
       emailStatus = await this.emailStatusRepository.save(emailStatus);
     } else {
       emailStatus = this.emailStatusRepository.create({
         userId,
         emailId,
         status,
+        snoozeUntil: null, // Ensure snoozeUntil is null for new status entries
       });
       emailStatus = await this.emailStatusRepository.save(emailStatus);
     }
@@ -349,15 +357,15 @@ export class EmailService {
   async getSnoozedEmails(userId: number): Promise<any[]> {
     this.logger.log(`[GET_SNOOZED] Fetching snoozed emails for user ${userId}`);
 
-    const snoozedStatuses = await this.emailStatusRepository.find({
-      where: {
-        userId,
-        status: KanbanStatus.SNOOZED,
-      },
-      order: {
-        snoozeUntil: 'ASC',
-      },
-    });
+    // Find all email statuses that have snoozeUntil in the future
+    // This covers both explicit SNOOZED status and any emails with active snooze
+    const now = new Date();
+    const snoozedStatuses = await this.emailStatusRepository
+      .createQueryBuilder('status')
+      .where('status.userId = :userId', { userId })
+      .andWhere('status.snoozeUntil > :now', { now })
+      .orderBy('status.snoozeUntil', 'ASC')
+      .getMany();
 
     this.logger.log(
       `[GET_SNOOZED] Found ${snoozedStatuses.length} snoozed emails for user ${userId}`,
@@ -445,10 +453,11 @@ export class EmailService {
       `[CHECK_EXPIRED] Checking expired snoozes for user ${userId} at ${now.toISOString()}`,
     );
 
+    // Find all emails with snoozeUntil in the past (expired)
     const expiredStatuses = await this.emailStatusRepository
       .createQueryBuilder('status')
       .where('status.userId = :userId', { userId })
-      .andWhere('status.status = :status', { status: KanbanStatus.SNOOZED })
+      .andWhere('status.snoozeUntil IS NOT NULL')
       .andWhere('status.snoozeUntil <= :now', { now })
       .getMany();
 
@@ -460,7 +469,7 @@ export class EmailService {
 
     for (const status of expiredStatuses) {
       this.logger.log(
-        `[CHECK_EXPIRED] Restoring email ${status.emailId} from SNOOZED to INBOX`,
+        `[CHECK_EXPIRED] Restoring email ${status.emailId} from ${status.status} to INBOX (clearing snooze)`,
       );
       status.status = KanbanStatus.INBOX;
       status.snoozeUntil = null;
