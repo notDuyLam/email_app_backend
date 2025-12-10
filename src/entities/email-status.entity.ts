@@ -31,5 +31,14 @@ export class EmailStatus extends BaseEntity {
     default: KanbanStatus.INBOX,
   })
   status: KanbanStatus;
+
+  @Column({ type: 'timestamp', nullable: true })
+  snoozeUntil: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  summary: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  summarizedAt: Date | null;
 }
 

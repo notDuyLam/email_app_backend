@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { GmailService } from '../gmail/gmail.service';
@@ -13,6 +18,8 @@ import { EmailStatusResponseDto } from './dto/email-status-response.dto';
 
 @Injectable()
 export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
+
   constructor(
     private readonly gmailService: GmailService,
     @InjectRepository(EmailStatus)
@@ -39,13 +46,31 @@ export class EmailService {
     // Calculate pageToken for pagination (Gmail uses pageToken, not page numbers)
     // For simplicity, we'll fetch from the beginning and use pageToken from previous calls
     // In a real implementation, you'd store pageToken in the frontend
-    const result = await this.gmailService.getEmails(userId, mailboxId, page, pageSize, pageToken, search);
+    const result = await this.gmailService.getEmails(
+      userId,
+      mailboxId,
+      page,
+      pageSize,
+      pageToken,
+      search,
+    );
+
+    // Get all email IDs to fetch their status (including snoozedUntil)
+    const emailIds = result.messages.slice(0, pageSize).map((msg) => msg.id);
+    const emailStatuses = await this.emailStatusRepository.find({
+      where: { emailId: In(emailIds), userId },
+    });
+    const statusMap = new Map(
+      emailStatuses.map((status) => [status.emailId, status]),
+    );
 
     // Fetch details for each message to get full info
     const emailDetails = await Promise.all(
       result.messages.slice(0, pageSize).map(async (msg) => {
         try {
           const detail = await this.gmailService.getEmailDetail(userId, msg.id);
+          const status = statusMap.get(msg.id);
+
           return {
             id: detail.id,
             senderName: this.extractNameFromEmail(detail.from),
@@ -54,6 +79,7 @@ export class EmailService {
             timestamp: detail.receivedDate,
             isStarred: detail.isStarred,
             isRead: detail.isRead,
+            snoozedUntil: status?.snoozeUntil || null, // Include snoozeUntil from status
           } as EmailListItemDto;
         } catch (error) {
           // If fetching detail fails, return minimal info
@@ -65,6 +91,7 @@ export class EmailService {
             timestamp: new Date(),
             isStarred: false,
             isRead: true,
+            snoozedUntil: null,
           } as EmailListItemDto;
         }
       }),
@@ -81,7 +108,7 @@ export class EmailService {
 
   async getEmailById(userId: number, emailId: string): Promise<EmailDetailDto> {
     const detail = await this.gmailService.getEmailDetail(userId, emailId);
-    
+
     return {
       id: detail.id,
       from: detail.from,
@@ -101,7 +128,10 @@ export class EmailService {
     };
   }
 
-  async sendEmail(userId: number, sendEmailDto: SendEmailDto): Promise<{ id: string; threadId: string }> {
+  async sendEmail(
+    userId: number,
+    sendEmailDto: SendEmailDto,
+  ): Promise<{ id: string; threadId: string }> {
     return this.gmailService.sendEmail(
       userId,
       sendEmailDto.to,
@@ -117,7 +147,11 @@ export class EmailService {
     );
   }
 
-  async replyEmail(userId: number, emailId: string, replyDto: ReplyEmailDto): Promise<{ id: string; threadId: string }> {
+  async replyEmail(
+    userId: number,
+    emailId: string,
+    replyDto: ReplyEmailDto,
+  ): Promise<{ id: string; threadId: string }> {
     return this.gmailService.replyEmail(
       userId,
       emailId,
@@ -130,7 +164,11 @@ export class EmailService {
     );
   }
 
-  async modifyEmail(userId: number, emailId: string, modifyDto: ModifyEmailDto): Promise<void> {
+  async modifyEmail(
+    userId: number,
+    emailId: string,
+    modifyDto: ModifyEmailDto,
+  ): Promise<void> {
     await this.gmailService.modifyEmail(
       userId,
       emailId,
@@ -149,7 +187,11 @@ export class EmailService {
     await this.gmailService.modifyEmail(userId, emailId, ['UNREAD'], []);
   }
 
-  async deleteEmail(userId: number, emailId: string, permanent: boolean = false): Promise<void> {
+  async deleteEmail(
+    userId: number,
+    emailId: string,
+    permanent: boolean = false,
+  ): Promise<void> {
     await this.gmailService.deleteEmail(userId, emailId, permanent);
   }
 
@@ -161,7 +203,10 @@ export class EmailService {
     return this.gmailService.getAttachment(userId, messageId, attachmentId);
   }
 
-  async getEmailStatus(userId: number, emailId: string): Promise<EmailStatusResponseDto> {
+  async getEmailStatus(
+    userId: number,
+    emailId: string,
+  ): Promise<EmailStatusResponseDto> {
     const emailStatus = await this.emailStatusRepository.findOne({
       where: { userId, emailId },
     });
@@ -235,6 +280,239 @@ export class EmailService {
 
   async deleteEmailStatus(userId: number, emailId: string): Promise<void> {
     await this.emailStatusRepository.delete({ userId, emailId });
+  }
+
+  // Snooze email until a specific time
+  async snoozeEmail(
+    userId: number,
+    emailId: string,
+    snoozeUntil: Date,
+  ): Promise<void> {
+    this.logger.log(
+      `[SNOOZE] User ${userId} snoozing email ${emailId} until ${snoozeUntil.toISOString()}`,
+    );
+
+    let emailStatus = await this.emailStatusRepository.findOne({
+      where: { userId, emailId },
+    });
+
+    if (!emailStatus) {
+      this.logger.log(
+        `[SNOOZE] Creating new email status for email ${emailId}`,
+      );
+      emailStatus = this.emailStatusRepository.create({
+        userId,
+        emailId,
+        status: KanbanStatus.SNOOZED,
+        snoozeUntil,
+      });
+    } else {
+      this.logger.log(
+        `[SNOOZE] Updating existing email status for email ${emailId} from ${emailStatus.status} to SNOOZED`,
+      );
+      emailStatus.status = KanbanStatus.SNOOZED;
+      emailStatus.snoozeUntil = snoozeUntil;
+    }
+
+    await this.emailStatusRepository.save(emailStatus);
+    this.logger.log(
+      `[SNOOZE] Successfully snoozed email ${emailId} for user ${userId}`,
+    );
+  }
+
+  // Unsnooze an email (remove snooze and return to INBOX)
+  async unsnoozeEmail(userId: number, emailId: string): Promise<void> {
+    this.logger.log(`[UNSNOOZE] User ${userId} unsnoozing email ${emailId}`);
+
+    const emailStatus = await this.emailStatusRepository.findOne({
+      where: { userId, emailId },
+    });
+
+    if (emailStatus) {
+      this.logger.log(
+        `[UNSNOOZE] Found email status for ${emailId}, changing from ${emailStatus.status} to INBOX`,
+      );
+      emailStatus.status = KanbanStatus.INBOX;
+      emailStatus.snoozeUntil = null;
+      await this.emailStatusRepository.save(emailStatus);
+      this.logger.log(
+        `[UNSNOOZE] Successfully unsnoozed email ${emailId} for user ${userId}`,
+      );
+    } else {
+      this.logger.warn(
+        `[UNSNOOZE] No email status found for email ${emailId} and user ${userId}`,
+      );
+    }
+  }
+
+  // Get all snoozed emails for a user with full email details
+  async getSnoozedEmails(userId: number): Promise<any[]> {
+    this.logger.log(`[GET_SNOOZED] Fetching snoozed emails for user ${userId}`);
+
+    const snoozedStatuses = await this.emailStatusRepository.find({
+      where: {
+        userId,
+        status: KanbanStatus.SNOOZED,
+      },
+      order: {
+        snoozeUntil: 'ASC',
+      },
+    });
+
+    this.logger.log(
+      `[GET_SNOOZED] Found ${snoozedStatuses.length} snoozed emails for user ${userId}`,
+    );
+
+    if (snoozedStatuses.length === 0) {
+      this.logger.log(
+        `[GET_SNOOZED] No snoozed emails found for user ${userId}`,
+      );
+      return [];
+    }
+
+    // Fetch email details from Gmail for each snoozed email
+    const emailsWithDetails = await Promise.all(
+      snoozedStatuses.map(async (status) => {
+        // Validate emailId
+        if (
+          !status.emailId ||
+          typeof status.emailId !== 'string' ||
+          status.emailId.trim() === ''
+        ) {
+          this.logger.error(
+            `[GET_SNOOZED] Invalid emailId for status ${status.id}: ${status.emailId}`,
+          );
+          return null;
+        }
+
+        try {
+          this.logger.log(
+            `[GET_SNOOZED] Fetching Gmail details for email ${status.emailId}`,
+          );
+          const emailDetail = await this.gmailService.getEmailDetail(
+            userId,
+            status.emailId,
+          );
+          return {
+            id: emailDetail.id,
+            threadId: emailDetail.threadId,
+            subject: emailDetail.subject || '(No Subject)',
+            from: emailDetail.from,
+            to: emailDetail.to,
+            cc: emailDetail.cc,
+            body: emailDetail.body,
+            preview: emailDetail.body?.substring(0, 200) || '',
+            timestamp: emailDetail.receivedDate,
+            receivedDate: emailDetail.receivedDate,
+            isRead: emailDetail.isRead,
+            isStarred: emailDetail.isStarred,
+            labels: [],
+            attachments: emailDetail.attachments || [],
+            senderName: this.extractSenderName(emailDetail.from),
+            snoozedUntil: status.snoozeUntil, // Use snoozedUntil for frontend consistency
+          };
+        } catch (error) {
+          this.logger.error(
+            `[GET_SNOOZED] Failed to fetch email ${status.emailId}: ${error.message}`,
+          );
+          console.error(`Failed to fetch email ${status.emailId}:`, error);
+          return null;
+        }
+      }),
+    );
+
+    // Filter out null values (failed fetches)
+    const filteredEmails = emailsWithDetails.filter((email) => email !== null);
+    this.logger.log(
+      `[GET_SNOOZED] Successfully fetched ${filteredEmails.length} snoozed emails for user ${userId}`,
+    );
+    return filteredEmails;
+  }
+
+  private extractSenderName(from: string): string {
+    if (!from) return 'Unknown Sender';
+    const match = from.match(/^(.+?)\s*<(.+)>$/);
+    if (match && match[1]) {
+      return match[1].trim().replace(/^["']|["']$/g, '');
+    }
+    return from.split('@')[0];
+  }
+
+  // Check and restore expired snoozed emails
+  async checkExpiredSnoozes(userId: number): Promise<string[]> {
+    const now = new Date();
+    this.logger.log(
+      `[CHECK_EXPIRED] Checking expired snoozes for user ${userId} at ${now.toISOString()}`,
+    );
+
+    const expiredStatuses = await this.emailStatusRepository
+      .createQueryBuilder('status')
+      .where('status.userId = :userId', { userId })
+      .andWhere('status.status = :status', { status: KanbanStatus.SNOOZED })
+      .andWhere('status.snoozeUntil <= :now', { now })
+      .getMany();
+
+    this.logger.log(
+      `[CHECK_EXPIRED] Found ${expiredStatuses.length} expired snoozed emails for user ${userId}`,
+    );
+
+    const restoredEmailIds: string[] = [];
+
+    for (const status of expiredStatuses) {
+      this.logger.log(
+        `[CHECK_EXPIRED] Restoring email ${status.emailId} from SNOOZED to INBOX`,
+      );
+      status.status = KanbanStatus.INBOX;
+      status.snoozeUntil = null;
+      await this.emailStatusRepository.save(status);
+      restoredEmailIds.push(status.emailId);
+    }
+
+    if (restoredEmailIds.length > 0) {
+      this.logger.log(
+        `[CHECK_EXPIRED] Successfully restored ${restoredEmailIds.length} emails for user ${userId}: ${restoredEmailIds.join(', ')}`,
+      );
+    }
+
+    return restoredEmailIds;
+  }
+
+  // Save or update email summary
+  async saveEmailSummary(
+    userId: number,
+    emailId: string,
+    summary: string,
+  ): Promise<void> {
+    let emailStatus = await this.emailStatusRepository.findOne({
+      where: { userId, emailId },
+    });
+
+    if (!emailStatus) {
+      emailStatus = this.emailStatusRepository.create({
+        userId,
+        emailId,
+        status: KanbanStatus.INBOX,
+        summary,
+        summarizedAt: new Date(),
+      });
+    } else {
+      emailStatus.summary = summary;
+      emailStatus.summarizedAt = new Date();
+    }
+
+    await this.emailStatusRepository.save(emailStatus);
+  }
+
+  // Get email summary
+  async getEmailSummary(
+    userId: number,
+    emailId: string,
+  ): Promise<string | null> {
+    const emailStatus = await this.emailStatusRepository.findOne({
+      where: { userId, emailId },
+    });
+
+    return emailStatus?.summary || null;
   }
 
   private extractNameFromEmail(email: string): string {

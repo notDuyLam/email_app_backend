@@ -39,7 +39,7 @@ import gmailConfig from './configs/gmail.config';
             database: url.pathname.slice(1), // Remove leading '/'
             entities: [User, GmailToken, EmailStatus],
             synchronize: false,
-            logging: configService.get<string>('NODE_ENV') === 'development',
+            logging: false,
             ssl: sslMode === 'require' ? { rejectUnauthorized: false } : false,
           };
         }
@@ -54,7 +54,7 @@ import gmailConfig from './configs/gmail.config';
           database: configService.get<string>('DB_DATABASE') || 'email_app_db',
           entities: [User, GmailToken],
           synchronize: false,
-          logging: configService.get<string>('NODE_ENV') === 'development',
+          logging: false,
         };
       },
       inject: [ConfigService],

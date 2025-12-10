@@ -6,6 +6,7 @@ export class EmailListItemDto {
   timestamp: Date;
   isStarred: boolean;
   isRead: boolean;
+  snoozedUntil?: Date | null;
 }
 
 export class EmailListResponseDto {
