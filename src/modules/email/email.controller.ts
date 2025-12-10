@@ -491,6 +491,13 @@ export class SummaryController {
     description: 'Email ID',
     example: '18c1234567890abcdef',
   })
+  @ApiQuery({
+    name: 'force',
+    required: false,
+    type: Boolean,
+    description: 'Force regenerate summary even if one exists',
+    example: false,
+  })
   @ApiResponse({
     status: 200,
     description: 'Email summary generated successfully',
@@ -499,25 +506,28 @@ export class SummaryController {
   async summarizeEmail(
     @CurrentUser() user: CurrentUserPayload,
     @Param('id') emailId: string,
+    @Query('force', new DefaultValuePipe(false), ParseBoolPipe) force?: boolean,
   ) {
-    // Check if summary already exists
-    const existingSummary = await this.emailService.getEmailSummary(
-      user.userId,
-      emailId,
-    );
+    // Check if summary already exists and not forcing regeneration
+    if (!force) {
+      const existingSummary = await this.emailService.getEmailSummary(
+        user.userId,
+        emailId,
+      );
 
-    if (existingSummary) {
-      const emailStatus = await this.emailService[
-        'emailStatusRepository'
-      ].findOne({
-        where: { userId: user.userId, emailId },
-      });
+      if (existingSummary) {
+        const emailStatus = await this.emailService[
+          'emailStatusRepository'
+        ].findOne({
+          where: { userId: user.userId, emailId },
+        });
 
-      return {
-        summary: existingSummary,
-        summarizedAt: emailStatus?.summarizedAt || new Date(),
-        cached: true,
-      };
+        return {
+          summary: existingSummary,
+          summarizedAt: emailStatus?.summarizedAt || new Date(),
+          cached: true,
+        };
+      }
     }
 
     // Fetch email content
