@@ -80,11 +80,16 @@ async function createNestApp() {
 
 // Lambda handler function
 export const handler: Handler = async (event: any, context: any, callback?: any) => {
-  if (!cachedServer) {
-    const expressApp = await createNestApp();
-    cachedServer = serverlessExpress({ app: expressApp });
+  try {
+    if (!cachedServer) {
+      const expressApp = await createNestApp();
+      cachedServer = serverlessExpress({ app: expressApp });
+    }
+    return cachedServer(event, context, callback);
+  } catch (error) {
+    console.error('Error in Lambda handler:', error);
+    throw error;
   }
-  return cachedServer(event, context, callback);
 };
 
 // Traditional server bootstrap (for local development)
