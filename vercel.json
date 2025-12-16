@@ -1,11 +1,17 @@
 {
   "version": 2,
+  "buildCommand": "npm run build",
   "builds": [
     {
       "src": "api/index.js",
       "use": "@vercel/node"
     }
   ],
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "dist/**"
+    }
+  },
   "routes": [
     {
       "src": "/(.*)",
@@ -13,7 +19,8 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "NPM_CONFIG_PRODUCTION": "false"
   }
 }
 
