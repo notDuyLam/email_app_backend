@@ -11,25 +11,26 @@ import { EmailStatus } from './entities/email-status.entity';
 import appConfig from './configs/app.config';
 import jwtConfig from './configs/jwt.config';
 import gmailConfig from './configs/gmail.config';
+import elasticsearchConfig from './configs/elasticsearch.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, jwtConfig, gmailConfig],
+      load: [appConfig, jwtConfig, gmailConfig, elasticsearchConfig],
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
         // Support Neon DB connection string or individual variables
         const databaseUrl = configService.get<string>('DATABASE_URL');
-        
+
         if (databaseUrl) {
           // Parse connection string (for Neon DB)
           // Replace postgresql:// with http:// for URL parsing
           const url = new URL(databaseUrl.replace(/^postgresql:/, 'http:'));
           const sslMode = url.searchParams.get('sslmode');
-          
+
           return {
             type: 'postgres',
             host: url.hostname,
@@ -43,7 +44,7 @@ import gmailConfig from './configs/gmail.config';
             ssl: sslMode === 'require' ? { rejectUnauthorized: false } : false,
           };
         }
-        
+
         // Fallback to individual variables
         return {
           type: 'postgres',
@@ -66,4 +67,6 @@ import gmailConfig from './configs/gmail.config';
   ],
 })
 export class AppModule {}
+
+
 

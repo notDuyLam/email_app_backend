@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-  UnauthorizedException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { GmailService } from '../gmail/gmail.service';
@@ -15,6 +10,10 @@ import { SendEmailDto } from './dto/send-email.dto';
 import { ReplyEmailDto } from './dto/reply-email.dto';
 import { ModifyEmailDto } from './dto/modify-email.dto';
 import { EmailStatusResponseDto } from './dto/email-status-response.dto';
+import {
+  ElasticsearchService,
+  EmailSearchDocument,
+} from '../search/elasticsearch.service';
 
 @Injectable()
 export class EmailService {
@@ -24,7 +23,29 @@ export class EmailService {
     private readonly gmailService: GmailService,
     @InjectRepository(EmailStatus)
     private readonly emailStatusRepository: Repository<EmailStatus>,
+    private readonly elasticsearchService: ElasticsearchService,
   ) {}
+
+  private mapToSearchDocument(
+    emailId: string,
+    detail: {
+      subject: string;
+      from: string;
+      body: string;
+      receivedDate: Date;
+    },
+    status?: EmailStatus,
+  ): EmailSearchDocument {
+    return {
+      id: emailId,
+      subject: detail.subject || '',
+      senderName: this.extractNameFromEmail(detail.from),
+      senderEmail: detail.from,
+      snippet: detail.body?.substring(0, 200) || '',
+      receivedAt: detail.receivedDate?.toISOString?.(),
+      status: status?.status,
+    };
+  }
 
   async getMailboxes(userId: number): Promise<MailboxDto[]> {
     const mailboxes = await this.gmailService.getMailboxes(userId);
@@ -106,6 +127,38 @@ export class EmailService {
     };
   }
 
+  async searchEmailsFuzzy(
+    userId: number,
+    query: string,
+    page = 1,
+    pageSize = 20,
+  ): Promise<EmailListResponseDto> {
+    const { total, items } = await this.elasticsearchService.searchEmails(
+      query,
+      page,
+      pageSize,
+    );
+
+    const emails: EmailListItemDto[] = items.map((item) => ({
+      id: item.id,
+      senderName: item.senderName,
+      subject: item.subject,
+      preview: item.snippet || '',
+      timestamp: item.receivedAt ? new Date(item.receivedAt) : new Date(),
+      isStarred: false,
+      isRead: item.status !== KanbanStatus.INBOX, // đơn giản: coi INBOX là chưa đọc
+      snoozedUntil: null,
+    }));
+
+    return {
+      emails,
+      total,
+      page,
+      pageSize,
+      nextPageToken: undefined,
+    };
+  }
+
   async getEmailById(userId: number, emailId: string): Promise<EmailDetailDto> {
     const detail = await this.gmailService.getEmailDetail(userId, emailId);
 
@@ -128,11 +181,21 @@ export class EmailService {
     };
   }
 
+  async indexEmailForSearch(userId: number, emailId: string): Promise<void> {
+    const [detail, status] = await Promise.all([
+      this.gmailService.getEmailDetail(userId, emailId),
+      this.emailStatusRepository.findOne({ where: { userId, emailId } }),
+    ]);
+
+    const doc = this.mapToSearchDocument(emailId, detail, status);
+    await this.elasticsearchService.indexEmail(doc);
+  }
+
   async sendEmail(
     userId: number,
     sendEmailDto: SendEmailDto,
   ): Promise<{ id: string; threadId: string }> {
-    return this.gmailService.sendEmail(
+    const result = await this.gmailService.sendEmail(
       userId,
       sendEmailDto.to,
       sendEmailDto.subject,
@@ -145,6 +208,17 @@ export class EmailService {
         mimeType: att.mimeType,
       })),
     );
+
+    // Index sent email for search (best-effort)
+    try {
+      await this.indexEmailForSearch(userId, result.id);
+    } catch (error) {
+      this.logger.error(
+        `Failed to index sent email ${result.id} for user ${userId}: ${error.message}`,
+      );
+    }
+
+    return result;
   }
 
   async replyEmail(

@@ -1,16 +1,16 @@
 import {
+  Body,
   Controller,
+  DefaultValuePipe,
   Get,
+  Param,
+  ParseBoolPipe,
+  ParseIntPipe,
   Post,
   Put,
-  Param,
   Query,
-  Body,
-  UseGuards,
-  ParseIntPipe,
-  DefaultValuePipe,
   Res,
-  ParseBoolPipe,
+  UseGuards,
 } from '@nestjs/common';
 import { Logger } from '@nestjs/common';
 import { Response } from 'express';
@@ -40,6 +40,7 @@ import {
   GetSnoozedEmailsResponseDto,
 } from './dto/snooze-email.dto';
 import { EmailSummaryResponseDto } from './dto/summary.dto';
+import { EmailSearchQueryDto } from './dto/email-search-query.dto';
 
 @ApiTags('mailboxes')
 @ApiBearerAuth('JWT-auth')
@@ -90,6 +91,39 @@ export class EmailController {
       pageSize,
       search,
       pageToken,
+    );
+  }
+
+  @Get('search')
+  @ApiTags('email-search')
+  @ApiOperation({ summary: 'Fuzzy search emails by subject and sender' })
+  @ApiQuery({
+    name: 'q',
+    required: true,
+    type: String,
+    description: 'Search query (supports typos and partial matches)',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    example: 20,
+  })
+  async searchEmails(
+    @CurrentUser() user: CurrentUserPayload,
+    @Query() query: EmailSearchQueryDto,
+  ) {
+    return this.emailService.searchEmailsFuzzy(
+      user.userId,
+      query.q,
+      query.page,
+      query.limit,
     );
   }
 }

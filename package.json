@@ -24,6 +24,7 @@
     "seed:users": "ts-node -r tsconfig-paths/register db/seeders/user.seeder.ts"
   },
   "dependencies": {
+    "@elastic/elasticsearch": "^9.2.0",
     "@google/generative-ai": "^0.24.1",
     "@nestjs/common": "^11.1.9",
     "@nestjs/config": "^4.0.2",
