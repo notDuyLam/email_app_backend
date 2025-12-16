@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import { Handler } from 'aws-lambda';
 import serverlessExpress from '@vendia/serverless-express';
-import * as express from 'express';
+import express from 'express';
 
 let cachedServer: Handler;
 
