@@ -1,14 +1,15 @@
 const { NestFactory } = require('@nestjs/core');
 const { ExpressAdapter } = require('@nestjs/platform-express');
 const express = require('express');
-const { AppModule } = require('../dist/app.module');
+// Use compiled NestJS app from dist/src (Nest keeps original folder structure)
+const { AppModule } = require('../dist/src/app.module');
 const { ValidationPipe } = require('@nestjs/common');
 const {
   HttpExceptionFilter,
-} = require('../dist/common/filters/http-exception.filter');
+} = require('../dist/src/common/filters/http-exception.filter');
 const {
   ResponseInterceptor,
-} = require('../dist/common/interceptors/response.interceptor');
+} = require('../dist/src/common/interceptors/response.interceptor');
 
 let cachedApp;
 
