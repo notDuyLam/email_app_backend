@@ -94,6 +94,29 @@ export class EmailController {
     );
   }
 
+  @Post(':id/reindex-search')
+  @ApiOperation({ summary: 'Reindex mailbox emails into Elasticsearch for fuzzy search' })
+  @ApiParam({ name: 'id', description: 'Mailbox ID', example: 'INBOX' })
+  @ApiResponse({
+    status: 200,
+    description: 'Reindex completed',
+  })
+  async reindexMailboxSearch(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') mailboxId: string,
+  ) {
+    const result = await this.emailService.reindexMailboxEmails(
+      user.userId,
+      mailboxId,
+    );
+
+    return {
+      message: 'Reindex completed',
+      mailboxId,
+      indexed: result.indexed,
+    };
+  }
+
   @Get('search')
   @ApiTags('email-search')
   @ApiOperation({ summary: 'Fuzzy search emails by subject and sender' })

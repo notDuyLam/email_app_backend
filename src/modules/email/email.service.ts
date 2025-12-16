@@ -41,7 +41,7 @@ export class EmailService {
       subject: detail.subject || '',
       senderName: this.extractNameFromEmail(detail.from),
       senderEmail: detail.from,
-      snippet: detail.body?.substring(0, 200) || '',
+      snippet: this.stripHtmlTags(detail.body).substring(0, 200),
       receivedAt: detail.receivedDate?.toISOString?.(),
       status: status?.status,
     };
@@ -96,7 +96,7 @@ export class EmailService {
             id: detail.id,
             senderName: this.extractNameFromEmail(detail.from),
             subject: detail.subject,
-            preview: detail.body.substring(0, 100) || '',
+            preview: this.stripHtmlTags(detail.body).substring(0, 100),
             timestamp: detail.receivedDate,
             isStarred: detail.isStarred,
             isRead: detail.isRead,
@@ -189,6 +189,70 @@ export class EmailService {
 
     const doc = this.mapToSearchDocument(emailId, detail, status);
     await this.elasticsearchService.indexEmail(doc);
+  }
+
+  async reindexMailboxEmails(
+    userId: number,
+    mailboxId: string = 'INBOX',
+    maxPages = 3,
+    pageSize = 50,
+  ): Promise<{ indexed: number }> {
+    let page = 1;
+    let pageToken: string | undefined = undefined;
+    let totalIndexed = 0;
+
+    for (; page <= maxPages; page++) {
+      const result = await this.gmailService.getEmails(
+        userId,
+        mailboxId,
+        page,
+        pageSize,
+        pageToken,
+        '',
+      );
+
+      const messages = result.messages || [];
+      if (!messages.length) {
+        break;
+      }
+
+      const emailIds = messages.map((m) => m.id);
+
+      const emailStatuses = await this.emailStatusRepository.find({
+        where: { emailId: In(emailIds), userId },
+      });
+      const statusMap = new Map<string, EmailStatus>(
+        emailStatuses.map((s) => [s.emailId, s]),
+      );
+
+      const docs: EmailSearchDocument[] = [];
+      for (const msg of messages) {
+        try {
+          const detail = await this.gmailService.getEmailDetail(userId, msg.id);
+          const status = statusMap.get(msg.id);
+          const doc = this.mapToSearchDocument(msg.id, detail, status);
+          docs.push(doc);
+        } catch (error) {
+          this.logger.error(
+            `[REINDEX] Failed to fetch detail for email ${msg.id}: ${error.message}`,
+          );
+        }
+      }
+
+      await this.elasticsearchService.bulkIndexEmails(docs);
+      totalIndexed += docs.length;
+
+      pageToken = result.nextPageToken;
+      if (!pageToken) {
+        break;
+      }
+    }
+
+    this.logger.log(
+      `[REINDEX] Indexed ${totalIndexed} emails for user ${userId} in mailbox ${mailboxId}`,
+    );
+
+    return { indexed: totalIndexed };
   }
 
   async sendEmail(
@@ -509,6 +573,21 @@ export class EmailService {
       `[GET_SNOOZED] Successfully fetched ${filteredEmails.length} snoozed emails for user ${userId}`,
     );
     return filteredEmails;
+  }
+
+  private stripHtmlTags(html: string | undefined | null): string {
+    if (!html) return '';
+    let text = html;
+    // Remove DOCTYPE and head sections which often contain meta/style only
+    text = text.replace(/<!DOCTYPE[\s\S]*?>/gi, ' ');
+    text = text.replace(/<head[\s\S]*?<\/head>/gi, ' ');
+    // Remove script and style tags altogether
+    text = text.replace(/<script[\s\S]*?<\/script>/gi, ' ');
+    text = text.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+    // Remove all remaining HTML tags
+    text = text.replace(/<[^>]*>/g, ' ');
+    // Collapse whitespace
+    return text.replace(/\s+/g, ' ').trim();
   }
 
   private extractSenderName(from: string): string {
