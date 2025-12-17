@@ -119,7 +119,7 @@ export class EmailController {
 
   @Get('search')
   @ApiTags('email-search')
-  @ApiOperation({ summary: 'Fuzzy search emails by subject and sender' })
+  @ApiOperation({ summary: 'Fuzzy search emails with filtering and sorting' })
   @ApiQuery({
     name: 'q',
     required: true,
@@ -138,6 +138,36 @@ export class EmailController {
     type: Number,
     example: 20,
   })
+  @ApiQuery({
+    name: 'unreadOnly',
+    required: false,
+    type: Boolean,
+    description: 'Show only unread emails',
+  })
+  @ApiQuery({
+    name: 'hasAttachment',
+    required: false,
+    type: Boolean,
+    description: 'Show only emails with attachments',
+  })
+  @ApiQuery({
+    name: 'sender',
+    required: false,
+    type: String,
+    description: 'Filter by sender name or email',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    description: 'Filter by kanban status',
+  })
+  @ApiQuery({
+    name: 'sort',
+    required: false,
+    enum: ['date_desc', 'date_asc', 'relevance'],
+    description: 'Sort order (default: relevance)',
+  })
   async searchEmails(
     @CurrentUser() user: CurrentUserPayload,
     @Query() query: EmailSearchQueryDto,
@@ -147,6 +177,13 @@ export class EmailController {
       query.q,
       query.page,
       query.limit,
+      {
+        unreadOnly: query.unreadOnly,
+        hasAttachment: query.hasAttachment,
+        sender: query.sender,
+        status: query.status,
+      },
+      query.sort,
     );
   }
 }

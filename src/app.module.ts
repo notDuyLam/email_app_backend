@@ -11,13 +11,12 @@ import { EmailStatus } from './entities/email-status.entity';
 import appConfig from './configs/app.config';
 import jwtConfig from './configs/jwt.config';
 import gmailConfig from './configs/gmail.config';
-import elasticsearchConfig from './configs/elasticsearch.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, jwtConfig, gmailConfig, elasticsearchConfig],
+      load: [appConfig, jwtConfig, gmailConfig],
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],

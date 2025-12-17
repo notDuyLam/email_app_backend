@@ -11,10 +11,10 @@ import { EmailService } from './email.service';
 import { SummarizationService } from './summarization.service';
 import { GmailModule } from '../gmail/gmail.module';
 import { EmailStatus } from '../../entities/email-status.entity';
-import { ElasticsearchModule } from '../search/elasticsearch.module';
+import { SearchModule } from '../search/search.module';
 
 @Module({
-  imports: [GmailModule, TypeOrmModule.forFeature([EmailStatus]), ElasticsearchModule],
+  imports: [GmailModule, TypeOrmModule.forFeature([EmailStatus]), SearchModule],
   // IMPORTANT: Controllers with static routes (SnoozeController, SummaryController) must be registered
   // BEFORE controllers with parameterized routes (EmailDetailController) to avoid route conflicts
   controllers: [

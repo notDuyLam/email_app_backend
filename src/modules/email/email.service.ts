@@ -11,9 +11,11 @@ import { ReplyEmailDto } from './dto/reply-email.dto';
 import { ModifyEmailDto } from './dto/modify-email.dto';
 import { EmailStatusResponseDto } from './dto/email-status-response.dto';
 import {
-  ElasticsearchService,
+  SearchService,
   EmailSearchDocument,
-} from '../search/elasticsearch.service';
+  SearchFilters,
+  SortOption,
+} from '../search/search.service';
 
 @Injectable()
 export class EmailService {
@@ -23,7 +25,7 @@ export class EmailService {
     private readonly gmailService: GmailService,
     @InjectRepository(EmailStatus)
     private readonly emailStatusRepository: Repository<EmailStatus>,
-    private readonly elasticsearchService: ElasticsearchService,
+    private readonly searchService: SearchService,
   ) {}
 
   private mapToSearchDocument(
@@ -92,6 +94,14 @@ export class EmailService {
           const detail = await this.gmailService.getEmailDetail(userId, msg.id);
           const status = statusMap.get(msg.id);
 
+          // Auto-index email for search (async, don't wait)
+          this.indexEmailForSearchAsync(userId, msg.id, detail, status).catch(
+            (err) =>
+              this.logger.warn(
+                `Failed to auto-index email ${msg.id}: ${err.message}`,
+              ),
+          );
+
           return {
             id: detail.id,
             senderName: this.extractNameFromEmail(detail.from),
@@ -132,11 +142,16 @@ export class EmailService {
     query: string,
     page = 1,
     pageSize = 20,
+    filters?: SearchFilters,
+    sort?: SortOption,
   ): Promise<EmailListResponseDto> {
-    const { total, items } = await this.elasticsearchService.searchEmails(
+    const { total, items } = await this.searchService.searchEmails(
+      userId,
       query,
       page,
       pageSize,
+      filters,
+      sort,
     );
 
     const emails: EmailListItemDto[] = items.map((item) => ({
@@ -181,6 +196,26 @@ export class EmailService {
     };
   }
 
+  /**
+   * Auto-index email for search (async helper - doesn't throw errors)
+   */
+  private async indexEmailForSearchAsync(
+    userId: number,
+    emailId: string,
+    detail?: any,
+    status?: EmailStatus,
+  ): Promise<void> {
+    try {
+      const doc = this.mapToSearchDocument(emailId, detail, status);
+      await this.searchService.indexEmail(userId, doc);
+    } catch (error) {
+      // Silently fail - this is background indexing
+      this.logger.debug(
+        `Auto-index failed for email ${emailId}: ${error.message}`,
+      );
+    }
+  }
+
   async indexEmailForSearch(userId: number, emailId: string): Promise<void> {
     const [detail, status] = await Promise.all([
       this.gmailService.getEmailDetail(userId, emailId),
@@ -188,7 +223,7 @@ export class EmailService {
     ]);
 
     const doc = this.mapToSearchDocument(emailId, detail, status);
-    await this.elasticsearchService.indexEmail(doc);
+    await this.searchService.indexEmail(userId, doc);
   }
 
   async reindexMailboxEmails(
@@ -239,7 +274,7 @@ export class EmailService {
         }
       }
 
-      await this.elasticsearchService.bulkIndexEmails(docs);
+      await this.searchService.bulkIndexEmails(userId, docs);
       totalIndexed += docs.length;
 
       pageToken = result.nextPageToken;
