@@ -92,6 +92,9 @@ export const handler: Handler = async (event: any, context: any, callback?: any)
   }
 };
 
+// Default export for Vercel/serverless platforms
+export default handler;
+
 // Traditional server bootstrap (for local development)
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
