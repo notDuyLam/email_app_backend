@@ -11,6 +11,7 @@ export interface EmailSearchDocument {
   snippet?: string;
   receivedAt?: string;
   status?: string;
+  bodyText?: string; // Truncated body text for embedding generation
 }
 
 export interface SearchResult {
@@ -40,6 +41,14 @@ export class SearchService {
     private readonly emailStatusRepository: Repository<EmailStatus>,
   ) {}
 
+  // Note: SemanticSearchService is injected separately to avoid circular dependency
+  // This will be set via setter injection or module configuration
+  private semanticSearchService: any = null;
+
+  setSemanticSearchService(service: any): void {
+    this.semanticSearchService = service;
+  }
+
   /**
    * Index a single email for search
    */
@@ -63,12 +72,50 @@ export class SearchService {
       emailStatus.senderEmail = doc.senderEmail;
       emailStatus.snippet = doc.snippet || null;
       emailStatus.receivedAt = doc.receivedAt ? new Date(doc.receivedAt) : null;
+      emailStatus.bodyText = doc.bodyText || null; // Store truncated body text
       if (doc.status) {
         emailStatus.status = doc.status as any;
       }
 
       await this.emailStatusRepository.save(emailStatus);
       this.logger.log(`Indexed email ${doc.id} for user ${userId}`);
+
+      // Generate embedding asynchronously (don't block indexing)
+      // Only generate if:
+      // 1. Semantic search service is available
+      // 2. Email doesn't already have an embedding
+      // 3. Body text exists
+      // NOTE: We skip embedding generation during bulk indexing to avoid rate limits
+      // Embeddings will be generated later via bulkIndexEmails with proper rate limiting
+      // This prevents hundreds of concurrent requests when loading dashboard
+      if (
+        false && // DISABLED: Skip individual embedding generation to avoid rate limits
+        this.semanticSearchService &&
+        doc.bodyText &&
+        !emailStatus.embedding // Skip if embedding already exists
+      ) {
+        // Check if embedding service is available (not quota exceeded)
+        if (this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
+          // Add delay before generating to avoid rate limits
+          setTimeout(() => {
+            this.semanticSearchService
+              .generateAndStoreEmbedding(
+                userId,
+                doc.id,
+                doc.subject,
+                doc.bodyText,
+              )
+              .catch((err: Error) => {
+                // Only log if it's not a quota error (those are handled by embedding service)
+                if (!err.message.includes('quota') && !err.message.includes('Quota')) {
+                  this.logger.warn(
+                    `Failed to generate embedding for email ${doc.id}: ${err.message}`,
+                  );
+                }
+              });
+          }, Math.random() * 5000); // Random delay 0-5 seconds to spread out requests
+        }
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -107,6 +154,7 @@ export class SearchService {
           emailStatus.receivedAt = doc.receivedAt
             ? new Date(doc.receivedAt)
             : null;
+          emailStatus.bodyText = doc.bodyText || null; // Store truncated body text
           if (doc.status) {
             emailStatus.status = doc.status as any;
           }
@@ -117,6 +165,98 @@ export class SearchService {
 
       await this.emailStatusRepository.save(emailStatuses);
       this.logger.log(`Bulk indexed ${docs.length} emails for user ${userId}`);
+
+      // Generate embeddings asynchronously for all emails (don't block indexing)
+      // Only generate for emails without embeddings and when service is available
+      if (this.semanticSearchService && this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
+        // Filter emails that need embeddings (have bodyText but no embedding)
+        const emailsNeedingEmbeddings = emailStatuses
+          .map((status, index) => ({ status, doc: docs[index] }))
+          .filter(
+            ({ status, doc }) =>
+              doc.bodyText && !status.embedding, // Only generate if bodyText exists and no embedding yet
+          );
+
+        if (emailsNeedingEmbeddings.length === 0) {
+          return; // All emails already have embeddings
+        }
+
+        this.logger.log(
+          `Generating embeddings for ${emailsNeedingEmbeddings.length} out of ${docs.length} emails`,
+        );
+
+        // Process embeddings SEQUENTIALLY (one at a time) to avoid rate limits
+        // This is slower but much safer for API rate limits
+        const delayBetweenEmails = 2000; // 2 seconds between each email
+
+        // Process in background (don't await)
+        (async () => {
+          for (let i = 0; i < emailsNeedingEmbeddings.length; i++) {
+            const { status, doc } = emailsNeedingEmbeddings[i];
+            
+            try {
+              // Check if service is still available before each request
+              if (!this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
+                this.logger.warn(
+                  `Embedding service unavailable (quota exceeded), stopping batch generation. Processed ${i}/${emailsNeedingEmbeddings.length} emails.`,
+                );
+                break; // Stop if quota exceeded
+              }
+              
+              await this.semanticSearchService.generateAndStoreEmbedding(
+                userId,
+                doc.id,
+                doc.subject,
+                doc.bodyText!,
+              );
+              
+              // Log progress every 10 emails
+              if ((i + 1) % 10 === 0) {
+                this.logger.log(
+                  `Generated embeddings for ${i + 1}/${emailsNeedingEmbeddings.length} emails`,
+                );
+              }
+            } catch (err: any) {
+              const errorMessage = err?.message || String(err);
+              
+              // If quota exceeded, stop processing
+              if (
+                errorMessage.includes('quota') ||
+                errorMessage.includes('Quota') ||
+                errorMessage.includes('429') ||
+                errorMessage.includes('temporarily disabled')
+              ) {
+                this.logger.warn(
+                  `Quota exceeded during batch generation. Processed ${i}/${emailsNeedingEmbeddings.length} emails. Remaining will be processed later.`,
+                );
+                break; // Stop processing
+              }
+              
+              // For other errors, log and continue
+              this.logger.warn(
+                `Failed to generate embedding for email ${doc.id}: ${errorMessage}`,
+              );
+            }
+            
+            // Add delay between each email (except for the last one)
+            if (i < emailsNeedingEmbeddings.length - 1) {
+              await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
+            }
+          }
+          
+          this.logger.log(
+            `Completed embedding generation batch for user ${userId}`,
+          );
+        })().catch((err) => {
+          this.logger.error(
+            `Error in bulk embedding generation: ${err.message}`,
+          );
+        });
+      } else if (this.semanticSearchService && !this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
+        this.logger.debug(
+          'Skipping embedding generation: embedding service unavailable (quota exceeded or not configured)',
+        );
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

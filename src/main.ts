@@ -57,6 +57,7 @@ async function bootstrap() {
     .addTag('auth', 'Authentication endpoints')
     .addTag('mailboxes', 'Mailbox management endpoints')
     .addTag('emails', 'Email management endpoints')
+    .addTag('search', 'Search endpoints (fuzzy & semantic)')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);

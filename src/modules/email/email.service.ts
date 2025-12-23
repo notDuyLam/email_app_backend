@@ -20,6 +20,9 @@ import {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
+  
+  // Track pending embedding generation jobs per user to avoid duplicate processing
+  private pendingEmbeddingJobs = new Map<number, NodeJS.Timeout>();
 
   constructor(
     private readonly gmailService: GmailService,
@@ -38,14 +41,16 @@ export class EmailService {
     },
     status?: EmailStatus,
   ): EmailSearchDocument {
+    const bodyText = this.stripHtmlTags(detail.body || '');
     return {
       id: emailId,
       subject: detail.subject || '',
       senderName: this.extractNameFromEmail(detail.from),
       senderEmail: detail.from,
-      snippet: this.stripHtmlTags(detail.body).substring(0, 200),
+      snippet: bodyText.substring(0, 200),
       receivedAt: detail.receivedDate?.toISOString?.(),
       status: status?.status,
+      bodyText: bodyText.substring(0, 5000), // Truncate to 5000 chars for embedding
     };
   }
 
@@ -87,6 +92,9 @@ export class EmailService {
       emailStatuses.map((status) => [status.emailId, status]),
     );
 
+    // Collect emails for bulk embedding generation (to avoid rate limits)
+    const emailsForBulkIndex: Array<{ id: string; detail: any; status?: EmailStatus }> = [];
+
     // Fetch details for each message to get full info
     const emailDetails = await Promise.all(
       result.messages.slice(0, pageSize).map(async (msg) => {
@@ -94,7 +102,11 @@ export class EmailService {
           const detail = await this.gmailService.getEmailDetail(userId, msg.id);
           const status = statusMap.get(msg.id);
 
+          // Collect email for bulk embedding generation
+          emailsForBulkIndex.push({ id: msg.id, detail, status });
+
           // Auto-index email for search (async, don't wait)
+          // This indexes the email but doesn't generate embeddings (disabled to avoid rate limits)
           this.indexEmailForSearchAsync(userId, msg.id, detail, status).catch(
             (err) =>
               this.logger.warn(
@@ -127,6 +139,12 @@ export class EmailService {
         }
       }),
     );
+
+    // Schedule bulk embedding generation after a delay (to avoid rate limits)
+    // This will generate embeddings for emails that don't have them yet
+    if (emailsForBulkIndex.length > 0) {
+      this.scheduleBulkEmbeddingGeneration(userId, emailsForBulkIndex);
+    }
 
     return {
       emails: emailDetails,
@@ -224,6 +242,52 @@ export class EmailService {
 
     const doc = this.mapToSearchDocument(emailId, detail, status);
     await this.searchService.indexEmail(userId, doc);
+  }
+
+  /**
+   * Schedule bulk embedding generation for emails
+   * Uses debouncing to avoid multiple calls for the same user
+   */
+  private scheduleBulkEmbeddingGeneration(
+    userId: number,
+    emails: Array<{ id: string; detail: any; status?: EmailStatus }>,
+  ): void {
+    // Clear existing timeout for this user if any
+    const existingTimeout = this.pendingEmbeddingJobs.get(userId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    // Schedule bulk embedding generation after 5 seconds delay
+    // This debounces multiple rapid calls (e.g., when user scrolls through pages)
+    const timeout = setTimeout(async () => {
+      try {
+        // Map emails to search documents
+        const docs = emails
+          .map(({ id, detail, status }) =>
+            this.mapToSearchDocument(id, detail, status),
+          )
+          .filter((doc) => doc.bodyText); // Only emails with body text
+
+        if (docs.length > 0) {
+          this.logger.log(
+            `[AUTO_EMBEDDING] Scheduling bulk embedding generation for ${docs.length} emails (user ${userId})`,
+          );
+          
+          // Call bulkIndexEmails which will generate embeddings with proper rate limiting
+          await this.searchService.bulkIndexEmails(userId, docs);
+        }
+      } catch (error) {
+        this.logger.error(
+          `[AUTO_EMBEDDING] Failed to generate embeddings: ${error.message}`,
+        );
+      } finally {
+        // Remove from pending jobs
+        this.pendingEmbeddingJobs.delete(userId);
+      }
+    }, 5000); // 5 second delay to debounce rapid calls
+
+    this.pendingEmbeddingJobs.set(userId, timeout);
   }
 
   async reindexMailboxEmails(
