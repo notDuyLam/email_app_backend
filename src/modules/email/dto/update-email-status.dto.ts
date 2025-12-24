@@ -1,17 +1,32 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty } from 'class-validator';
-import { KanbanStatus } from '../../../entities/email-status.entity';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateEmailStatusDto {
   @ApiProperty({
-    description: 'Kanban column status',
-    enum: KanbanStatus,
-    example: KanbanStatus.TODO,
+    description: 'Kanban column status (can be custom column ID)',
+    example: 'todo',
   })
   @IsNotEmpty()
-  @IsEnum(KanbanStatus, {
-    message: 'Status must be one of: inbox, todo, in-progress, done, snoozed',
+  @IsString()
+  @MaxLength(255)
+  status: string;
+
+  @ApiProperty({
+    description: 'Gmail label ID to sync (optional)',
+    example: 'STARRED',
+    required: false,
   })
-  status: KanbanStatus;
+  @IsOptional()
+  @IsString()
+  gmailLabelId?: string;
+
+  @ApiProperty({
+    description: 'Previous Gmail label ID to remove (optional)',
+    example: 'INBOX',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  oldGmailLabelId?: string;
 }
 

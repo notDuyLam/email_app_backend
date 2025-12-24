@@ -406,6 +406,8 @@ export class EmailDetailController {
       user.userId,
       emailId,
       updateDto.status,
+      updateDto.gmailLabelId,
+      updateDto.oldGmailLabelId,
     );
   }
 }

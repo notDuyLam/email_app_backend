@@ -458,13 +458,25 @@ export class EmailService {
   async updateEmailStatus(
     userId: number,
     emailId: string,
-    status: KanbanStatus,
+    status: string,
+    gmailLabelId?: string,
+    oldGmailLabelId?: string,
   ): Promise<EmailStatusResponseDto> {
+    this.logger.log(
+      `[UPDATE_STATUS] Updating email ${emailId} for user ${userId} to status: ${status}`,
+      { gmailLabelId, oldGmailLabelId },
+    );
+    
     let emailStatus = await this.emailStatusRepository.findOne({
       where: { userId, emailId },
     });
+    
+    this.logger.log(
+      `[UPDATE_STATUS] Found email status: ${emailStatus ? 'exists' : 'not found'}`,
+    );
 
     if (emailStatus) {
+      const oldStatus = emailStatus.status;
       emailStatus.status = status;
       // Clear snoozeUntil when moving OUT of SNOOZED status
       if (status !== KanbanStatus.SNOOZED && emailStatus.snoozeUntil) {
@@ -474,6 +486,9 @@ export class EmailService {
         emailStatus.snoozeUntil = null;
       }
       emailStatus = await this.emailStatusRepository.save(emailStatus);
+      this.logger.log(
+        `[UPDATE_STATUS] Updated existing email status from ${oldStatus} to ${emailStatus.status}`,
+      );
     } else {
       emailStatus = this.emailStatusRepository.create({
         userId,
@@ -482,6 +497,30 @@ export class EmailService {
         snoozeUntil: null, // Ensure snoozeUntil is null for new status entries
       });
       emailStatus = await this.emailStatusRepository.save(emailStatus);
+      this.logger.log(
+        `[UPDATE_STATUS] Created new email status with status: ${emailStatus.status}`,
+      );
+    }
+
+    // Sync Gmail labels if provided
+    const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
+    const removeLabelIds = oldGmailLabelId && oldGmailLabelId !== gmailLabelId 
+      ? [oldGmailLabelId] 
+      : [];
+
+    if (addLabelIds.length > 0 || removeLabelIds.length > 0) {
+      try {
+        await this.gmailService.modifyEmail(userId, emailId, addLabelIds, removeLabelIds);
+        this.logger.log(
+          `[UPDATE_STATUS] Synced Gmail labels for email ${emailId}: add=${JSON.stringify(addLabelIds)}, remove=${JSON.stringify(removeLabelIds)}`,
+        );
+      } catch (error) {
+        // Log warning but continue - status update in DB should succeed even if Gmail sync fails
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `[UPDATE_STATUS] Failed to sync Gmail labels for email ${emailId}: ${errorMessage}. Status update in DB succeeded.`,
+        );
+      }
     }
 
     return {

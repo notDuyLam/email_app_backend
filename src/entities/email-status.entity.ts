@@ -26,11 +26,11 @@ export class EmailStatus extends BaseEntity {
   emailId: string;
 
   @Column({
-    type: 'enum',
-    enum: KanbanStatus,
+    type: 'varchar',
+    length: 255,
     default: KanbanStatus.INBOX,
   })
-  status: KanbanStatus;
+  status: string;
 
   @Column({ type: 'timestamp', nullable: true })
   snoozeUntil: Date | null;
