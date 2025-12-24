@@ -6,12 +6,12 @@ import { EmbeddingService } from './embedding.service';
 import { SemanticSearchService } from './semantic-search.service';
 import { SearchController } from './search.controller';
 import { EmailStatus } from '../../entities/email-status.entity';
-import geminiConfig from '../../configs/gemini.config';
+import embeddingConfig from '../../configs/embedding.config';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([EmailStatus]),
-    ConfigModule.forFeature(geminiConfig),
+    ConfigModule.forFeature(embeddingConfig),
   ],
   providers: [SearchService, EmbeddingService, SemanticSearchService],
   controllers: [SearchController],

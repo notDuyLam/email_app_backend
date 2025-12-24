@@ -185,9 +185,11 @@ export class SearchService {
           `Generating embeddings for ${emailsNeedingEmbeddings.length} out of ${docs.length} emails`,
         );
 
-        // Process embeddings SEQUENTIALLY (one at a time) to avoid rate limits
-        // This is slower but much safer for API rate limits
-        const delayBetweenEmails = 2000; // 2 seconds between each email
+        // Process embeddings one by one in background.
+        // NOTE: Previously we added a 2s delay between emails to avoid external API rate limits.
+        // Now we are using a local embedding model by default, so we can safely remove that delay
+        // and generate embeddings continuously for better indexing performance.
+        const delayBetweenEmails = 0;
 
         // Process in background (don't await)
         (async () => {
@@ -239,7 +241,7 @@ export class SearchService {
             }
             
             // Add delay between each email (except for the last one)
-            if (i < emailsNeedingEmbeddings.length - 1) {
+            if (i < emailsNeedingEmbeddings.length - 1 && delayBetweenEmails > 0) {
               await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
             }
           }

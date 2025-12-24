@@ -81,8 +81,12 @@ export class SemanticSearchService {
         searchTerm,
       );
 
+      // Pad embedding to 768 dimensions if needed (for local model with 384 dims)
+      // PostgreSQL vector column is fixed at 768 dimensions
+      const paddedEmbedding = this.padEmbedding(queryEmbedding, 768);
+
       // Convert embedding array to PostgreSQL vector format
-      const embeddingString = `[${queryEmbedding.join(',')}]`;
+      const embeddingString = `[${paddedEmbedding.join(',')}]`;
 
       // Build base query with vector similarity search
       let queryBuilder = this.emailStatusRepository
@@ -291,8 +295,12 @@ export class SemanticSearchService {
         textForEmbedding,
       );
 
+      // Pad embedding to 768 dimensions if needed (for local model with 384 dims)
+      // PostgreSQL vector column is fixed at 768 dimensions
+      const paddedEmbedding = this.padEmbedding(embedding, 768);
+
       // Convert embedding to PostgreSQL vector format
-      const embeddingString = `[${embedding.join(',')}]`;
+      const embeddingString = `[${paddedEmbedding.join(',')}]`;
 
       // Update email status with embedding
       // Use raw query to update vector column since TypeORM doesn't support it natively
@@ -338,6 +346,29 @@ export class SemanticSearchService {
    */
   isEmbeddingServiceAvailable(): boolean {
     return this.embeddingService.isAvailable();
+  }
+
+  /**
+   * Pad embedding vector to target dimensions
+   * Used when local model (384 dims) needs to match PostgreSQL column (768 dims)
+   * Padding with zeros is safe for cosine similarity
+   */
+  private padEmbedding(embedding: number[], targetDimensions: number): number[] {
+    if (embedding.length === targetDimensions) {
+      return embedding;
+    }
+
+    if (embedding.length > targetDimensions) {
+      // Truncate if somehow larger (shouldn't happen)
+      this.logger.warn(
+        `Embedding dimension ${embedding.length} is larger than target ${targetDimensions}, truncating`,
+      );
+      return embedding.slice(0, targetDimensions);
+    }
+
+    // Pad with zeros
+    const padding = new Array(targetDimensions - embedding.length).fill(0);
+    return [...embedding, ...padding];
   }
 }
 

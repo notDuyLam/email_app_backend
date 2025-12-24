@@ -13,12 +13,13 @@ import appConfig from './configs/app.config';
 import jwtConfig from './configs/jwt.config';
 import gmailConfig from './configs/gmail.config';
 import geminiConfig from './configs/gemini.config';
+import embeddingConfig from './configs/embedding.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, jwtConfig, gmailConfig, geminiConfig],
+      load: [appConfig, jwtConfig, gmailConfig, geminiConfig, embeddingConfig],
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
