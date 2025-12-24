@@ -1,8 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { pipeline, type FeatureExtractionPipeline } from '@xenova/transformers';
 import { EmbeddingProvider } from '../../configs/embedding.config';
+
+// Dynamic import type for transformers
+type FeatureExtractionPipeline = any;
 
 @Injectable()
 export class EmbeddingService implements OnModuleInit {
@@ -99,6 +101,9 @@ export class EmbeddingService implements OnModuleInit {
 
     try {
       this.logger.log(`Loading local embedding model: ${modelName}...`);
+      
+      // Dynamic import of @xenova/transformers (ES Module)
+      const { pipeline } = await import('@xenova/transformers');
       
       // Load the model - this will download it on first use (~90MB)
       // Subsequent runs will use cached model
