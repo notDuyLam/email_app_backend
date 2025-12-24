@@ -84,13 +84,26 @@ export class EmailService {
     );
 
     // Get all email IDs to fetch their status (including snoozedUntil)
+    // Note: We only query status for emails that Gmail actually returned
+    // This is correct - we can only fetch details for emails that exist in the mailbox
     const emailIds = result.messages.slice(0, pageSize).map((msg) => msg.id);
-    const emailStatuses = await this.emailStatusRepository.find({
-      where: { emailId: In(emailIds), userId },
-    });
-    const statusMap = new Map(
-      emailStatuses.map((status) => [status.emailId, status]),
-    );
+    
+    // Only query statuses if we have email IDs to avoid unnecessary queries
+    let statusMap = new Map<string, EmailStatus>();
+    if (emailIds.length > 0) {
+      const emailStatuses = await this.emailStatusRepository.find({
+        where: { emailId: In(emailIds), userId },
+      });
+
+      this.logger.log(
+        `[GET_EMAILS] Found ${emailStatuses.length} statuses for ${emailIds.length} emails in mailbox ${mailboxId}`,
+      );
+      statusMap = new Map(
+        emailStatuses.map((status) => [status.emailId, status]),
+      );
+    } else {
+      this.logger.log(`[GET_EMAILS] No emails found in mailbox ${mailboxId}`);
+    }
 
     // Collect emails for bulk embedding generation (to avoid rate limits)
     const emailsForBulkIndex: Array<{ id: string; detail: any; status?: EmailStatus }> = [];
@@ -502,26 +515,31 @@ export class EmailService {
       );
     }
 
-    // Sync Gmail labels if provided
-    const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
-    const removeLabelIds = oldGmailLabelId && oldGmailLabelId !== gmailLabelId 
-      ? [oldGmailLabelId] 
-      : [];
-
-    if (addLabelIds.length > 0 || removeLabelIds.length > 0) {
-      try {
-        await this.gmailService.modifyEmail(userId, emailId, addLabelIds, removeLabelIds);
-        this.logger.log(
-          `[UPDATE_STATUS] Synced Gmail labels for email ${emailId}: add=${JSON.stringify(addLabelIds)}, remove=${JSON.stringify(removeLabelIds)}`,
-        );
-      } catch (error) {
-        // Log warning but continue - status update in DB should succeed even if Gmail sync fails
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `[UPDATE_STATUS] Failed to sync Gmail labels for email ${emailId}: ${errorMessage}. Status update in DB succeeded.`,
-        );
-      }
-    }
+    // DISABLED: Gmail label sync when updating kanban status
+    // Reason: Kanban status is an app-specific concept and should not affect Gmail labels.
+    // Syncing labels causes emails to be removed from INBOX, making them unfetchable.
+    // If Gmail label sync is needed for specific operations (e.g., archiving), 
+    // it should be handled separately, not as part of kanban status updates.
+    //
+    // const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
+    // const removeLabelIds = oldGmailLabelId && oldGmailLabelId !== gmailLabelId 
+    //   ? [oldGmailLabelId] 
+    //   : [];
+    //
+    // if (addLabelIds.length > 0 || removeLabelIds.length > 0) {
+    //   try {
+    //     await this.gmailService.modifyEmail(userId, emailId, addLabelIds, removeLabelIds);
+    //     this.logger.log(
+    //       `[UPDATE_STATUS] Synced Gmail labels for email ${emailId}: add=${JSON.stringify(addLabelIds)}, remove=${JSON.stringify(removeLabelIds)}`,
+    //     );
+    //   } catch (error) {
+    //     // Log warning but continue - status update in DB should succeed even if Gmail sync fails
+    //     const errorMessage = error instanceof Error ? error.message : String(error);
+    //     this.logger.warn(
+    //       `[UPDATE_STATUS] Failed to sync Gmail labels for email ${emailId}: ${errorMessage}. Status update in DB succeeded.`,
+    //     );
+    //   }
+    // }
 
     return {
       emailId: emailStatus.emailId,

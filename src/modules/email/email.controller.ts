@@ -84,7 +84,7 @@ export class EmailController {
     @Query('search') search?: string,
     @Query('pageToken') pageToken?: string,
   ) {
-    return this.emailService.getEmailsByMailbox(
+    const result = await this.emailService.getEmailsByMailbox(
       user.userId,
       mailboxId,
       page,
@@ -92,6 +92,7 @@ export class EmailController {
       search,
       pageToken,
     );
+    return result;
   }
 
   @Post(':id/reindex-search')
