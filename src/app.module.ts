@@ -5,18 +5,21 @@ import { AuthModule } from './modules/auth/auth.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
 import { GmailModule } from './modules/gmail/gmail.module';
+import { SearchModule } from './modules/search/search.module';
 import { User } from './entities/user.entity';
 import { GmailToken } from './entities/gmail-token.entity';
 import { EmailStatus } from './entities/email-status.entity';
 import appConfig from './configs/app.config';
 import jwtConfig from './configs/jwt.config';
 import gmailConfig from './configs/gmail.config';
+import geminiConfig from './configs/gemini.config';
+import embeddingConfig from './configs/embedding.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, jwtConfig, gmailConfig],
+      load: [appConfig, jwtConfig, gmailConfig, geminiConfig, embeddingConfig],
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
@@ -63,6 +66,7 @@ import gmailConfig from './configs/gmail.config';
     EmailModule,
     HealthModule,
     GmailModule,
+    SearchModule,
   ],
 })
 export class AppModule {}

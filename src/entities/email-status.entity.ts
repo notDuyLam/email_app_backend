@@ -26,11 +26,11 @@ export class EmailStatus extends BaseEntity {
   emailId: string;
 
   @Column({
-    type: 'enum',
-    enum: KanbanStatus,
+    type: 'varchar',
+    length: 255,
     default: KanbanStatus.INBOX,
   })
-  status: KanbanStatus;
+  status: string;
 
   @Column({ type: 'timestamp', nullable: true })
   snoozeUntil: Date | null;
@@ -59,5 +59,18 @@ export class EmailStatus extends BaseEntity {
 
   @Column({ type: 'tsvector', nullable: true, select: false, name: 'search_vector' })
   searchVector: string | null;
+
+  // Semantic search columns for vector embeddings
+  @Column({ type: 'text', nullable: true, name: 'body_text' })
+  bodyText: string | null;
+
+  // Embedding vector (768 dimensions for Gemini embedding-001)
+  // TypeORM doesn't have native vector support, so we use 'text' type
+  // and cast to vector in raw SQL queries
+  @Column({ type: 'text', nullable: true, select: false })
+  embedding: string | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'embedding_updated_at' })
+  embeddingUpdatedAt: Date | null;
 }
 

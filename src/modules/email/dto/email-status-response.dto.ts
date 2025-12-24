@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsArray, IsString, ArrayMinSize } from 'class-validator';
-import { KanbanStatus } from '../../../entities/email-status.entity';
 
 export class EmailStatusResponseDto {
   @ApiProperty({
@@ -10,11 +9,10 @@ export class EmailStatusResponseDto {
   emailId: string;
 
   @ApiProperty({
-    description: 'Kanban column status',
-    enum: KanbanStatus,
-    example: KanbanStatus.TODO,
+    description: 'Kanban column status (can be custom column ID)',
+    example: 'todo',
   })
-  status: KanbanStatus;
+  status: string;
 
   @ApiProperty({
     description: 'Last update timestamp',

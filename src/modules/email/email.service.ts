@@ -20,6 +20,9 @@ import {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
+  
+  // Track pending embedding generation jobs per user to avoid duplicate processing
+  private pendingEmbeddingJobs = new Map<number, NodeJS.Timeout>();
 
   constructor(
     private readonly gmailService: GmailService,
@@ -38,14 +41,16 @@ export class EmailService {
     },
     status?: EmailStatus,
   ): EmailSearchDocument {
+    const bodyText = this.stripHtmlTags(detail.body || '');
     return {
       id: emailId,
       subject: detail.subject || '',
       senderName: this.extractNameFromEmail(detail.from),
       senderEmail: detail.from,
-      snippet: this.stripHtmlTags(detail.body).substring(0, 200),
+      snippet: bodyText.substring(0, 200),
       receivedAt: detail.receivedDate?.toISOString?.(),
       status: status?.status,
+      bodyText: bodyText.substring(0, 5000), // Truncate to 5000 chars for embedding
     };
   }
 
@@ -79,13 +84,29 @@ export class EmailService {
     );
 
     // Get all email IDs to fetch their status (including snoozedUntil)
+    // Note: We only query status for emails that Gmail actually returned
+    // This is correct - we can only fetch details for emails that exist in the mailbox
     const emailIds = result.messages.slice(0, pageSize).map((msg) => msg.id);
-    const emailStatuses = await this.emailStatusRepository.find({
-      where: { emailId: In(emailIds), userId },
-    });
-    const statusMap = new Map(
-      emailStatuses.map((status) => [status.emailId, status]),
-    );
+    
+    // Only query statuses if we have email IDs to avoid unnecessary queries
+    let statusMap = new Map<string, EmailStatus>();
+    if (emailIds.length > 0) {
+      const emailStatuses = await this.emailStatusRepository.find({
+        where: { emailId: In(emailIds), userId },
+      });
+
+      this.logger.log(
+        `[GET_EMAILS] Found ${emailStatuses.length} statuses for ${emailIds.length} emails in mailbox ${mailboxId}`,
+      );
+      statusMap = new Map(
+        emailStatuses.map((status) => [status.emailId, status]),
+      );
+    } else {
+      this.logger.log(`[GET_EMAILS] No emails found in mailbox ${mailboxId}`);
+    }
+
+    // Collect emails for bulk embedding generation (to avoid rate limits)
+    const emailsForBulkIndex: Array<{ id: string; detail: any; status?: EmailStatus }> = [];
 
     // Fetch details for each message to get full info
     const emailDetails = await Promise.all(
@@ -94,7 +115,11 @@ export class EmailService {
           const detail = await this.gmailService.getEmailDetail(userId, msg.id);
           const status = statusMap.get(msg.id);
 
+          // Collect email for bulk embedding generation
+          emailsForBulkIndex.push({ id: msg.id, detail, status });
+
           // Auto-index email for search (async, don't wait)
+          // This indexes the email but doesn't generate embeddings (disabled to avoid rate limits)
           this.indexEmailForSearchAsync(userId, msg.id, detail, status).catch(
             (err) =>
               this.logger.warn(
@@ -127,6 +152,12 @@ export class EmailService {
         }
       }),
     );
+
+    // Schedule bulk embedding generation after a delay (to avoid rate limits)
+    // This will generate embeddings for emails that don't have them yet
+    if (emailsForBulkIndex.length > 0) {
+      this.scheduleBulkEmbeddingGeneration(userId, emailsForBulkIndex);
+    }
 
     return {
       emails: emailDetails,
@@ -224,6 +255,52 @@ export class EmailService {
 
     const doc = this.mapToSearchDocument(emailId, detail, status);
     await this.searchService.indexEmail(userId, doc);
+  }
+
+  /**
+   * Schedule bulk embedding generation for emails
+   * Uses debouncing to avoid multiple calls for the same user
+   */
+  private scheduleBulkEmbeddingGeneration(
+    userId: number,
+    emails: Array<{ id: string; detail: any; status?: EmailStatus }>,
+  ): void {
+    // Clear existing timeout for this user if any
+    const existingTimeout = this.pendingEmbeddingJobs.get(userId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    // Schedule bulk embedding generation after 5 seconds delay
+    // This debounces multiple rapid calls (e.g., when user scrolls through pages)
+    const timeout = setTimeout(async () => {
+      try {
+        // Map emails to search documents
+        const docs = emails
+          .map(({ id, detail, status }) =>
+            this.mapToSearchDocument(id, detail, status),
+          )
+          .filter((doc) => doc.bodyText); // Only emails with body text
+
+        if (docs.length > 0) {
+          this.logger.log(
+            `[AUTO_EMBEDDING] Scheduling bulk embedding generation for ${docs.length} emails (user ${userId})`,
+          );
+          
+          // Call bulkIndexEmails which will generate embeddings with proper rate limiting
+          await this.searchService.bulkIndexEmails(userId, docs);
+        }
+      } catch (error) {
+        this.logger.error(
+          `[AUTO_EMBEDDING] Failed to generate embeddings: ${error.message}`,
+        );
+      } finally {
+        // Remove from pending jobs
+        this.pendingEmbeddingJobs.delete(userId);
+      }
+    }, 5000); // 5 second delay to debounce rapid calls
+
+    this.pendingEmbeddingJobs.set(userId, timeout);
   }
 
   async reindexMailboxEmails(
@@ -394,13 +471,25 @@ export class EmailService {
   async updateEmailStatus(
     userId: number,
     emailId: string,
-    status: KanbanStatus,
+    status: string,
+    gmailLabelId?: string,
+    oldGmailLabelId?: string,
   ): Promise<EmailStatusResponseDto> {
+    this.logger.log(
+      `[UPDATE_STATUS] Updating email ${emailId} for user ${userId} to status: ${status}`,
+      { gmailLabelId, oldGmailLabelId },
+    );
+    
     let emailStatus = await this.emailStatusRepository.findOne({
       where: { userId, emailId },
     });
+    
+    this.logger.log(
+      `[UPDATE_STATUS] Found email status: ${emailStatus ? 'exists' : 'not found'}`,
+    );
 
     if (emailStatus) {
+      const oldStatus = emailStatus.status;
       emailStatus.status = status;
       // Clear snoozeUntil when moving OUT of SNOOZED status
       if (status !== KanbanStatus.SNOOZED && emailStatus.snoozeUntil) {
@@ -410,6 +499,9 @@ export class EmailService {
         emailStatus.snoozeUntil = null;
       }
       emailStatus = await this.emailStatusRepository.save(emailStatus);
+      this.logger.log(
+        `[UPDATE_STATUS] Updated existing email status from ${oldStatus} to ${emailStatus.status}`,
+      );
     } else {
       emailStatus = this.emailStatusRepository.create({
         userId,
@@ -418,7 +510,36 @@ export class EmailService {
         snoozeUntil: null, // Ensure snoozeUntil is null for new status entries
       });
       emailStatus = await this.emailStatusRepository.save(emailStatus);
+      this.logger.log(
+        `[UPDATE_STATUS] Created new email status with status: ${emailStatus.status}`,
+      );
     }
+
+    // DISABLED: Gmail label sync when updating kanban status
+    // Reason: Kanban status is an app-specific concept and should not affect Gmail labels.
+    // Syncing labels causes emails to be removed from INBOX, making them unfetchable.
+    // If Gmail label sync is needed for specific operations (e.g., archiving), 
+    // it should be handled separately, not as part of kanban status updates.
+    //
+    // const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
+    // const removeLabelIds = oldGmailLabelId && oldGmailLabelId !== gmailLabelId 
+    //   ? [oldGmailLabelId] 
+    //   : [];
+    //
+    // if (addLabelIds.length > 0 || removeLabelIds.length > 0) {
+    //   try {
+    //     await this.gmailService.modifyEmail(userId, emailId, addLabelIds, removeLabelIds);
+    //     this.logger.log(
+    //       `[UPDATE_STATUS] Synced Gmail labels for email ${emailId}: add=${JSON.stringify(addLabelIds)}, remove=${JSON.stringify(removeLabelIds)}`,
+    //     );
+    //   } catch (error) {
+    //     // Log warning but continue - status update in DB should succeed even if Gmail sync fails
+    //     const errorMessage = error instanceof Error ? error.message : String(error);
+    //     this.logger.warn(
+    //       `[UPDATE_STATUS] Failed to sync Gmail labels for email ${emailId}: ${errorMessage}. Status update in DB succeeded.`,
+    //     );
+    //   }
+    // }
 
     return {
       emailId: emailStatus.emailId,
