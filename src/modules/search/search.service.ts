@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { EmailStatus } from '../../entities/email-status.entity';
+import { Email } from '../../entities/email.entity';
+import { EmailVector } from '../../entities/email-vector.entity';
 
 export interface EmailSearchDocument {
   id: string;
@@ -37,12 +38,13 @@ export class SearchService {
   private readonly logger = new Logger(SearchService.name);
 
   constructor(
-    @InjectRepository(EmailStatus)
-    private readonly emailStatusRepository: Repository<EmailStatus>,
+    @InjectRepository(Email)
+    private readonly emailRepository: Repository<Email>,
+    @InjectRepository(EmailVector)
+    private readonly emailVectorRepository: Repository<EmailVector>,
   ) {}
 
   // Note: SemanticSearchService is injected separately to avoid circular dependency
-  // This will be set via setter injection or module configuration
   private semanticSearchService: any = null;
 
   setSemanticSearchService(service: any): void {
@@ -54,49 +56,43 @@ export class SearchService {
    */
   async indexEmail(userId: number, doc: EmailSearchDocument): Promise<void> {
     try {
-      // Find existing email status or create new one
-      let emailStatus = await this.emailStatusRepository.findOne({
-        where: { userId, emailId: doc.id },
+      // Find existing email or create new one
+      let email = await this.emailRepository.findOne({
+        where: { userId, gmailId: doc.id },
       });
 
-      if (!emailStatus) {
-        emailStatus = this.emailStatusRepository.create({
+      if (!email) {
+        email = this.emailRepository.create({
           userId,
-          emailId: doc.id,
+          gmailId: doc.id,
         });
       }
 
       // Update search-related fields
-      emailStatus.subject = doc.subject;
-      emailStatus.senderName = doc.senderName;
-      emailStatus.senderEmail = doc.senderEmail;
-      emailStatus.snippet = doc.snippet || null;
-      emailStatus.receivedAt = doc.receivedAt ? new Date(doc.receivedAt) : null;
-      emailStatus.bodyText = doc.bodyText || null; // Store truncated body text
-      if (doc.status) {
-        emailStatus.status = doc.status as any;
-      }
+      email.subject = doc.subject;
+      email.senderName = doc.senderName;
+      email.senderEmail = doc.senderEmail;
+      email.snippet = doc.snippet || null;
+      email.receivedAt = doc.receivedAt ? new Date(doc.receivedAt) : null;
+      email.bodyText = doc.bodyText || null;
 
-      await this.emailStatusRepository.save(emailStatus);
+      await this.emailRepository.save(email);
       this.logger.log(`Indexed email ${doc.id} for user ${userId}`);
 
-      // Generate embedding asynchronously (don't block indexing)
-      // Only generate if:
-      // 1. Semantic search service is available
-      // 2. Email doesn't already have an embedding
-      // 3. Body text exists
-      // NOTE: We skip embedding generation during bulk indexing to avoid rate limits
-      // Embeddings will be generated later via bulkIndexEmails with proper rate limiting
-      // This prevents hundreds of concurrent requests when loading dashboard
+      // Check if embedding exists for this email
+      const hasEmbedding = await this.emailVectorRepository.findOne({
+        where: { emailId: email.id },
+        select: ['id'],
+      });
+
+      // Generate embedding asynchronously if needed
       if (
         false && // DISABLED: Skip individual embedding generation to avoid rate limits
         this.semanticSearchService &&
         doc.bodyText &&
-        !emailStatus.embedding // Skip if embedding already exists
+        !hasEmbedding
       ) {
-        // Check if embedding service is available (not quota exceeded)
         if (this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
-          // Add delay before generating to avoid rate limits
           setTimeout(() => {
             this.semanticSearchService
               .generateAndStoreEmbedding(
@@ -106,14 +102,13 @@ export class SearchService {
                 doc.bodyText,
               )
               .catch((err: Error) => {
-                // Only log if it's not a quota error (those are handled by embedding service)
                 if (!err.message.includes('quota') && !err.message.includes('Quota')) {
                   this.logger.warn(
                     `Failed to generate embedding for email ${doc.id}: ${err.message}`,
                   );
                 }
               });
-          }, Math.random() * 5000); // Random delay 0-5 seconds to spread out requests
+          }, Math.random() * 5000);
         }
       }
     } catch (error) {
@@ -134,85 +129,89 @@ export class SearchService {
     if (!docs.length) return;
 
     try {
-      const emailStatuses = await Promise.all(
+      const emails = await Promise.all(
         docs.map(async (doc) => {
-          let emailStatus = await this.emailStatusRepository.findOne({
-            where: { userId, emailId: doc.id },
+          let email = await this.emailRepository.findOne({
+            where: { userId, gmailId: doc.id },
           });
 
-          if (!emailStatus) {
-            emailStatus = this.emailStatusRepository.create({
+          if (!email) {
+            email = this.emailRepository.create({
               userId,
-              emailId: doc.id,
+              gmailId: doc.id,
             });
           }
 
-          emailStatus.subject = doc.subject;
-          emailStatus.senderName = doc.senderName;
-          emailStatus.senderEmail = doc.senderEmail;
-          emailStatus.snippet = doc.snippet || null;
-          emailStatus.receivedAt = doc.receivedAt
-            ? new Date(doc.receivedAt)
-            : null;
-          emailStatus.bodyText = doc.bodyText || null; // Store truncated body text
-          if (doc.status) {
-            emailStatus.status = doc.status as any;
-          }
+          email.subject = doc.subject;
+          email.senderName = doc.senderName;
+          email.senderEmail = doc.senderEmail;
+          email.snippet = doc.snippet || null;
+          email.receivedAt = doc.receivedAt ? new Date(doc.receivedAt) : null;
+          email.bodyText = doc.bodyText || null;
 
-          return emailStatus;
+          return email;
         }),
       );
 
-      await this.emailStatusRepository.save(emailStatuses);
+      await this.emailRepository.save(emails);
       this.logger.log(`Bulk indexed ${docs.length} emails for user ${userId}`);
 
-      // Generate embeddings asynchronously for all emails (don't block indexing)
-      // Only generate for emails without embeddings and when service is available
+      // Generate embeddings asynchronously
       if (this.semanticSearchService && this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
-        // Filter emails that need embeddings (have bodyText but no embedding)
-        const emailsNeedingEmbeddings = emailStatuses
-          .map((status, index) => ({ status, doc: docs[index] }))
-          .filter(
-            ({ status, doc }) =>
-              doc.bodyText && !status.embedding, // Only generate if bodyText exists and no embedding yet
-          );
+        // Get email IDs that were just saved
+        const savedEmails = await this.emailRepository.find({
+          where: emails.map((e) => ({ userId, gmailId: e.gmailId })),
+          select: ['id', 'gmailId'],
+        });
+
+        const emailIdMap = new Map(savedEmails.map((e) => [e.gmailId, e.id]));
+
+        // Check which emails already have embeddings
+        const emailIds = savedEmails.map((e) => e.id);
+        const existingVectors = await this.emailVectorRepository.find({
+          where: emailIds.map((id) => ({ emailId: id })),
+          select: ['emailId'],
+        });
+
+        const existingEmbeddingIds = new Set(existingVectors.map((v) => v.emailId));
+
+        // Filter emails that need embeddings
+        const emailsNeedingEmbeddings = docs
+          .filter((doc) => {
+            const emailId = emailIdMap.get(doc.id);
+            return doc.bodyText && emailId && !existingEmbeddingIds.has(emailId);
+          });
 
         if (emailsNeedingEmbeddings.length === 0) {
-          return; // All emails already have embeddings
+          return;
         }
 
         this.logger.log(
           `Generating embeddings for ${emailsNeedingEmbeddings.length} out of ${docs.length} emails`,
         );
 
-        // Process embeddings one by one in background.
-        // NOTE: Previously we added a 2s delay between emails to avoid external API rate limits.
-        // Now we are using a local embedding model by default, so we can safely remove that delay
-        // and generate embeddings continuously for better indexing performance.
         const delayBetweenEmails = 0;
 
-        // Process in background (don't await)
+        // Process in background
         (async () => {
           for (let i = 0; i < emailsNeedingEmbeddings.length; i++) {
-            const { status, doc } = emailsNeedingEmbeddings[i];
-            
+            const doc = emailsNeedingEmbeddings[i];
+
             try {
-              // Check if service is still available before each request
               if (!this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
                 this.logger.warn(
-                  `Embedding service unavailable (quota exceeded), stopping batch generation. Processed ${i}/${emailsNeedingEmbeddings.length} emails.`,
+                  `Embedding service unavailable, stopping batch generation. Processed ${i}/${emailsNeedingEmbeddings.length} emails.`,
                 );
-                break; // Stop if quota exceeded
+                break;
               }
-              
+
               await this.semanticSearchService.generateAndStoreEmbedding(
                 userId,
                 doc.id,
                 doc.subject,
                 doc.bodyText!,
               );
-              
-              // Log progress every 10 emails
+
               if ((i + 1) % 10 === 0) {
                 this.logger.log(
                   `Generated embeddings for ${i + 1}/${emailsNeedingEmbeddings.length} emails`,
@@ -220,8 +219,7 @@ export class SearchService {
               }
             } catch (err: any) {
               const errorMessage = err?.message || String(err);
-              
-              // If quota exceeded, stop processing
+
               if (
                 errorMessage.includes('quota') ||
                 errorMessage.includes('Quota') ||
@@ -229,23 +227,21 @@ export class SearchService {
                 errorMessage.includes('temporarily disabled')
               ) {
                 this.logger.warn(
-                  `Quota exceeded during batch generation. Processed ${i}/${emailsNeedingEmbeddings.length} emails. Remaining will be processed later.`,
+                  `Quota exceeded during batch generation. Processed ${i}/${emailsNeedingEmbeddings.length} emails.`,
                 );
-                break; // Stop processing
+                break;
               }
-              
-              // For other errors, log and continue
+
               this.logger.warn(
                 `Failed to generate embedding for email ${doc.id}: ${errorMessage}`,
               );
             }
-            
-            // Add delay between each email (except for the last one)
+
             if (i < emailsNeedingEmbeddings.length - 1 && delayBetweenEmails > 0) {
               await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
             }
           }
-          
+
           this.logger.log(
             `Completed embedding generation batch for user ${userId}`,
           );
@@ -256,7 +252,7 @@ export class SearchService {
         });
       } else if (this.semanticSearchService && !this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
         this.logger.debug(
-          'Skipping embedding generation: embedding service unavailable (quota exceeded or not configured)',
+          'Skipping embedding generation: embedding service unavailable',
         );
       }
     } catch (error) {
@@ -269,11 +265,6 @@ export class SearchService {
 
   /**
    * Fuzzy search emails using PostgreSQL Full-Text Search + Trigram similarity
-   * Supports:
-   * - Typo tolerance (via pg_trgm)
-   * - Partial matches
-   * - Full-text search
-   * - Ranking by relevance
    */
   async searchEmails(
     userId: number,
@@ -291,8 +282,9 @@ export class SearchService {
       );
 
       // Build the base query
-      let queryBuilder = this.emailStatusRepository
+      let queryBuilder = this.emailRepository
         .createQueryBuilder('email')
+        .leftJoinAndSelect('email.kanbanColumn', 'kanbanColumn')
         .where('email.userId = :userId', { userId })
         .andWhere(
           '(email.subject IS NOT NULL OR email.senderName IS NOT NULL OR email.senderEmail IS NOT NULL)',
@@ -300,7 +292,7 @@ export class SearchService {
 
       // Apply filters
       if (filters?.unreadOnly) {
-        queryBuilder = queryBuilder.andWhere("email.status = 'inbox'");
+        queryBuilder = queryBuilder.andWhere("kanbanColumn.name = 'Inbox'");
       }
 
       if (filters?.sender) {
@@ -311,7 +303,7 @@ export class SearchService {
       }
 
       if (filters?.status) {
-        queryBuilder = queryBuilder.andWhere('email.status = :status', {
+        queryBuilder = queryBuilder.andWhere('kanbanColumn.name = :status', {
           status: filters.status,
         });
       }
@@ -320,8 +312,6 @@ export class SearchService {
       if (query && query.trim()) {
         const searchTerm = query.trim();
 
-        // Use trigram similarity for fuzzy matching + ILIKE for partial match
-        // Lower threshold (0.05) for better recall, prioritize ILIKE for exact partial matches
         queryBuilder = queryBuilder.andWhere(
           `(
             similarity(LOWER(email.subject), LOWER(:searchTerm)) > 0.05 OR
@@ -338,7 +328,6 @@ export class SearchService {
           },
         );
 
-        // Add relevance score for ranking (prioritize exact matches)
         queryBuilder = queryBuilder.addSelect(
           `
           (
@@ -356,7 +345,6 @@ export class SearchService {
           'relevance_score',
         );
       } else {
-        // If no search query, just add a default score
         queryBuilder = queryBuilder.addSelect('1', 'relevance_score');
       }
 
@@ -380,13 +368,13 @@ export class SearchService {
         .getRawAndEntities();
 
       const items = results.entities.map((email, index) => ({
-        id: email.emailId,
+        id: email.gmailId,
         subject: email.subject || '',
         senderName: email.senderName || '',
         senderEmail: email.senderEmail || '',
         snippet: email.snippet || '',
         receivedAt: email.receivedAt?.toISOString(),
-        status: email.status,
+        status: email.kanbanColumn?.name || 'Inbox',
         score: results.raw[index]?.relevance_score || 0,
       }));
 
@@ -403,7 +391,6 @@ export class SearchService {
         error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to search emails: ${errorMessage}`);
 
-      // Return empty results instead of throwing to prevent app crash
       return {
         total: 0,
         items: [],
@@ -414,14 +401,14 @@ export class SearchService {
   /**
    * Delete indexed email
    */
-  async deleteEmail(userId: number, emailId: string): Promise<void> {
+  async deleteEmail(userId: number, gmailId: string): Promise<void> {
     try {
-      await this.emailStatusRepository.delete({ userId, emailId });
-      this.logger.log(`Deleted email ${emailId} from index for user ${userId}`);
+      await this.emailRepository.delete({ userId, gmailId });
+      this.logger.log(`Deleted email ${gmailId} from index for user ${userId}`);
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed to delete email ${emailId}: ${errorMessage}`);
+      this.logger.error(`Failed to delete email ${gmailId}: ${errorMessage}`);
     }
   }
 }

@@ -76,12 +76,12 @@ export class GmailService {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
       });
-      
+
       const gmail = google.gmail({ version: 'v1', auth: tempOAuth2Client });
       const profile = await gmail.users.getProfile({ userId: 'me' });
 
       const email = profile.data.emailAddress;
-      
+
       if (!email) {
         throw new BadRequestException('Unable to retrieve user email from Gmail profile');
       }
@@ -355,7 +355,7 @@ export class GmailService {
 
       // Filter out system labels that shouldn't be shown as mailboxes
       const hiddenLabels = ['CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS'];
-      
+
       return response.data.labels
         .filter((label) => {
           // Show system labels like INBOX, SENT, DRAFT, etc.
@@ -403,19 +403,27 @@ export class GmailService {
   }> {
     try {
       const gmail = await this.createGmailClient(userId);
-      
+
+      const isAll = labelId === 'ALL' || labelId === 'ALL_MAIL' || labelId === 'ALL_EMAILS';
+
       // Build query for search
-      let q = `in:${labelId.toLowerCase()}`;
+      // - For specific labels: keep `in:<label>` behavior
+      // - For ALL: do not constrain by label; just use search (if any)
+      let q: string | undefined = undefined;
       if (search && search.trim()) {
-        q = `${search} ${q}`;
+        q = search.trim();
       }
-      
+      if (!isAll) {
+        const inClause = `in:${labelId.toLowerCase()}`;
+        q = q ? `${q} ${inClause}` : inClause;
+      }
+
       const response = await gmail.users.messages.list({
         userId: 'me',
-        labelIds: [labelId],
+        ...(isAll ? {} : { labelIds: [labelId] }),
         maxResults: pageSize,
         pageToken: pageToken,
-        q: search && search.trim() ? q : undefined,
+        q,
       });
 
       return {
@@ -430,19 +438,25 @@ export class GmailService {
       if (error.code === 401) {
         await this.getAccessToken(userId);
         const gmail = await this.createGmailClient(userId);
-        
+
+        const isAll = labelId === 'ALL' || labelId === 'ALL_MAIL' || labelId === 'ALL_EMAILS';
+
         // Build query for search on retry
-        let q = `in:${labelId.toLowerCase()}`;
+        let q: string | undefined = undefined;
         if (search && search.trim()) {
-          q = `${search} ${q}`;
+          q = search.trim();
         }
-        
+        if (!isAll) {
+          const inClause = `in:${labelId.toLowerCase()}`;
+          q = q ? `${q} ${inClause}` : inClause;
+        }
+
         const response = await gmail.users.messages.list({
           userId: 'me',
-          labelIds: [labelId],
+          ...(isAll ? {} : { labelIds: [labelId] }),
           maxResults: pageSize,
           pageToken: pageToken,
-          q: search && search.trim() ? q : undefined,
+          q,
         });
         return {
           messages: (response.data.messages || []).map((msg) => ({
@@ -470,6 +484,7 @@ export class GmailService {
     attachments: Array<{ id: string; name: string; size: number; type: string }>;
     isStarred: boolean;
     isRead: boolean;
+    labelIds: string[];
   }> {
     try {
       const gmail = await this.createGmailClient(userId);
@@ -519,6 +534,7 @@ export class GmailService {
         })),
         isStarred: message.labelIds?.includes('STARRED') || false,
         isRead: !message.labelIds?.includes('UNREAD'),
+        labelIds: message.labelIds || [],
       };
     } catch (error: any) {
       if (error.code === 401) {
@@ -620,7 +636,7 @@ export class GmailService {
         // Create multipart message with attachments
         const boundary = `boundary_${Date.now()}`;
         const messageLines: string[] = [];
-        
+
         messageLines.push(`To: ${to.join(', ')}`);
         if (cc && cc.length > 0) {
           messageLines.push(`Cc: ${cc.join(', ')}`);
@@ -632,7 +648,7 @@ export class GmailService {
         messageLines.push(`MIME-Version: 1.0`);
         messageLines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
         messageLines.push('');
-        
+
         // Add body part
         messageLines.push(`--${boundary}`);
         messageLines.push('Content-Type: text/html; charset=utf-8');
@@ -640,7 +656,7 @@ export class GmailService {
         messageLines.push('');
         messageLines.push(Buffer.from(body).toString('base64'));
         messageLines.push('');
-        
+
         // Add attachment parts
         for (const attachment of attachments) {
           messageLines.push(`--${boundary}`);
@@ -652,7 +668,7 @@ export class GmailService {
           messageLines.push(attachment.content);
           messageLines.push('');
         }
-        
+
         messageLines.push(`--${boundary}--`);
         message = messageLines.join('\n');
       } else {

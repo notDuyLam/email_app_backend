@@ -1,32 +1,37 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsOptional, IsString, IsNumber, MaxLength } from 'class-validator';
 
 export class UpdateEmailStatusDto {
   @ApiProperty({
-    description: 'Kanban column status (can be custom column ID)',
-    example: 'todo',
+    description: 'Kanban column name or ID',
+    example: 'To Do',
   })
   @IsNotEmpty()
   @IsString()
   @MaxLength(255)
   status: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
+    description: 'Kanban column ID (alternative to status name)',
+    example: 2,
+  })
+  @IsOptional()
+  @IsNumber()
+  kanbanColumnId?: number;
+
+  @ApiPropertyOptional({
     description: 'Gmail label ID to sync (optional)',
     example: 'STARRED',
-    required: false,
   })
   @IsOptional()
   @IsString()
   gmailLabelId?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Previous Gmail label ID to remove (optional)',
     example: 'INBOX',
-    required: false,
   })
   @IsOptional()
   @IsString()
   oldGmailLabelId?: string;
 }
-

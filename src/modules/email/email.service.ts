@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, DataSource } from 'typeorm';
 import { GmailService } from '../gmail/gmail.service';
-import { EmailStatus, KanbanStatus } from '../../entities/email-status.entity';
+import { Email } from '../../entities/email.entity';
+import { SnoozeSchedule } from '../../entities/snooze-schedule.entity';
+import { KanbanColumn } from '../../entities/kanban-column.entity';
 import { MailboxDto } from './dto/mailbox.dto';
 import { EmailListResponseDto, EmailListItemDto } from './dto/email-list.dto';
 import { EmailDetailDto } from './dto/email-detail.dto';
@@ -20,38 +22,61 @@ import {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  
+
   // Track pending embedding generation jobs per user to avoid duplicate processing
   private pendingEmbeddingJobs = new Map<number, NodeJS.Timeout>();
 
   constructor(
     private readonly gmailService: GmailService,
-    @InjectRepository(EmailStatus)
-    private readonly emailStatusRepository: Repository<EmailStatus>,
+    @InjectRepository(Email)
+    private readonly emailRepository: Repository<Email>,
+    @InjectRepository(SnoozeSchedule)
+    private readonly snoozeScheduleRepository: Repository<SnoozeSchedule>,
+    @InjectRepository(KanbanColumn)
+    private readonly kanbanColumnRepository: Repository<KanbanColumn>,
     private readonly searchService: SearchService,
+    private readonly dataSource: DataSource,
   ) {}
 
   private mapToSearchDocument(
-    emailId: string,
+    gmailId: string,
     detail: {
       subject: string;
       from: string;
       body: string;
       receivedDate: Date;
     },
-    status?: EmailStatus,
+    email?: Email,
   ): EmailSearchDocument {
     const bodyText = this.stripHtmlTags(detail.body || '');
     return {
-      id: emailId,
+      id: gmailId,
       subject: detail.subject || '',
       senderName: this.extractNameFromEmail(detail.from),
       senderEmail: detail.from,
       snippet: bodyText.substring(0, 200),
       receivedAt: detail.receivedDate?.toISOString?.(),
-      status: status?.status,
+      status: email?.kanbanColumn?.name || 'Inbox',
       bodyText: bodyText.substring(0, 5000), // Truncate to 5000 chars for embedding
     };
+  }
+
+  /**
+   * Get default Inbox column for a user
+   */
+  private async getDefaultInboxColumn(userId: number): Promise<KanbanColumn | null> {
+    return this.kanbanColumnRepository.findOne({
+      where: { userId, name: 'Inbox', isDefault: true },
+    });
+  }
+
+  /**
+   * Get column by name for a user
+   */
+  private async getColumnByName(userId: number, name: string): Promise<KanbanColumn | null> {
+    return this.kanbanColumnRepository.findOne({
+      where: { userId, name },
+    });
   }
 
   async getMailboxes(userId: number): Promise<MailboxDto[]> {
@@ -71,9 +96,6 @@ export class EmailService {
     search?: string,
     pageToken?: string,
   ): Promise<EmailListResponseDto> {
-    // Calculate pageToken for pagination (Gmail uses pageToken, not page numbers)
-    // For simplicity, we'll fetch from the beginning and use pageToken from previous calls
-    // In a real implementation, you'd store pageToken in the frontend
     const result = await this.gmailService.getEmails(
       userId,
       mailboxId,
@@ -83,44 +105,50 @@ export class EmailService {
       search,
     );
 
-    // Get all email IDs to fetch their status (including snoozedUntil)
-    // Note: We only query status for emails that Gmail actually returned
-    // This is correct - we can only fetch details for emails that exist in the mailbox
-    const emailIds = result.messages.slice(0, pageSize).map((msg) => msg.id);
+    const gmailIds = result.messages.slice(0, pageSize).map((msg) => msg.id);
+
+    // Get emails from our database to check snooze status
+    let emailMap = new Map<string, Email>();
+    let snoozeMap = new Map<number, SnoozeSchedule>();
     
-    // Only query statuses if we have email IDs to avoid unnecessary queries
-    let statusMap = new Map<string, EmailStatus>();
-    if (emailIds.length > 0) {
-      const emailStatuses = await this.emailStatusRepository.find({
-        where: { emailId: In(emailIds), userId },
+    if (gmailIds.length > 0) {
+      const emails = await this.emailRepository.find({
+        where: { gmailId: In(gmailIds), userId },
       });
 
       this.logger.log(
-        `[GET_EMAILS] Found ${emailStatuses.length} statuses for ${emailIds.length} emails in mailbox ${mailboxId}`,
+        `[GET_EMAILS] Found ${emails.length} cached emails for ${gmailIds.length} emails in mailbox ${mailboxId}`,
       );
-      statusMap = new Map(
-        emailStatuses.map((status) => [status.emailId, status]),
-      );
+      emailMap = new Map(emails.map((e) => [e.gmailId, e]));
+
+      // Get snooze schedules for these emails
+      const emailIds = emails.map((e) => e.id);
+      if (emailIds.length > 0) {
+        const snoozes = await this.snoozeScheduleRepository.find({
+          where: { emailId: In(emailIds) },
+        });
+        snoozeMap = new Map(snoozes.map((s) => [s.emailId, s]));
+      }
     } else {
       this.logger.log(`[GET_EMAILS] No emails found in mailbox ${mailboxId}`);
     }
 
-    // Collect emails for bulk embedding generation (to avoid rate limits)
-    const emailsForBulkIndex: Array<{ id: string; detail: any; status?: EmailStatus }> = [];
+    // Collect emails for bulk embedding generation
+    const emailsForBulkIndex: Array<{ id: string; detail: any; email?: Email }> = [];
 
-    // Fetch details for each message to get full info
+    // Fetch details for each message
     const emailDetails = await Promise.all(
       result.messages.slice(0, pageSize).map(async (msg) => {
         try {
           const detail = await this.gmailService.getEmailDetail(userId, msg.id);
-          const status = statusMap.get(msg.id);
+          const email = emailMap.get(msg.id);
+          const snooze = email ? snoozeMap.get(email.id) : null;
 
           // Collect email for bulk embedding generation
-          emailsForBulkIndex.push({ id: msg.id, detail, status });
+          emailsForBulkIndex.push({ id: msg.id, detail, email });
 
           // Auto-index email for search (async, don't wait)
-          // This indexes the email but doesn't generate embeddings (disabled to avoid rate limits)
-          this.indexEmailForSearchAsync(userId, msg.id, detail, status).catch(
+          this.indexEmailForSearchAsync(userId, msg.id, detail, email).catch(
             (err) =>
               this.logger.warn(
                 `Failed to auto-index email ${msg.id}: ${err.message}`,
@@ -135,10 +163,9 @@ export class EmailService {
             timestamp: detail.receivedDate,
             isStarred: detail.isStarred,
             isRead: detail.isRead,
-            snoozedUntil: status?.snoozeUntil || null, // Include snoozeUntil from status
+            snoozedUntil: snooze?.snoozeUntil || null,
           } as EmailListItemDto;
         } catch (error) {
-          // If fetching detail fails, return minimal info
           return {
             id: msg.id,
             senderName: '',
@@ -153,8 +180,7 @@ export class EmailService {
       }),
     );
 
-    // Schedule bulk embedding generation after a delay (to avoid rate limits)
-    // This will generate embeddings for emails that don't have them yet
+    // Schedule bulk embedding generation
     if (emailsForBulkIndex.length > 0) {
       this.scheduleBulkEmbeddingGeneration(userId, emailsForBulkIndex);
     }
@@ -192,7 +218,7 @@ export class EmailService {
       preview: item.snippet || '',
       timestamp: item.receivedAt ? new Date(item.receivedAt) : new Date(),
       isStarred: false,
-      isRead: item.status !== KanbanStatus.INBOX, // đơn giản: coi INBOX là chưa đọc
+      isRead: item.status !== 'Inbox',
       snoozedUntil: null,
     }));
 
@@ -224,6 +250,7 @@ export class EmailService {
       })),
       isStarred: detail.isStarred,
       isRead: detail.isRead,
+      labelIds: detail.labelIds || [],
     };
   }
 
@@ -232,62 +259,57 @@ export class EmailService {
    */
   private async indexEmailForSearchAsync(
     userId: number,
-    emailId: string,
+    gmailId: string,
     detail?: any,
-    status?: EmailStatus,
+    email?: Email,
   ): Promise<void> {
     try {
-      const doc = this.mapToSearchDocument(emailId, detail, status);
+      const doc = this.mapToSearchDocument(gmailId, detail, email);
       await this.searchService.indexEmail(userId, doc);
     } catch (error) {
-      // Silently fail - this is background indexing
       this.logger.debug(
-        `Auto-index failed for email ${emailId}: ${error.message}`,
+        `Auto-index failed for email ${gmailId}: ${error.message}`,
       );
     }
   }
 
-  async indexEmailForSearch(userId: number, emailId: string): Promise<void> {
-    const [detail, status] = await Promise.all([
-      this.gmailService.getEmailDetail(userId, emailId),
-      this.emailStatusRepository.findOne({ where: { userId, emailId } }),
+  async indexEmailForSearch(userId: number, gmailId: string): Promise<void> {
+    const [detail, email] = await Promise.all([
+      this.gmailService.getEmailDetail(userId, gmailId),
+      this.emailRepository.findOne({
+        where: { userId, gmailId },
+        relations: ['kanbanColumn'],
+      }),
     ]);
 
-    const doc = this.mapToSearchDocument(emailId, detail, status);
+    const doc = this.mapToSearchDocument(gmailId, detail, email || undefined);
     await this.searchService.indexEmail(userId, doc);
   }
 
   /**
    * Schedule bulk embedding generation for emails
-   * Uses debouncing to avoid multiple calls for the same user
    */
   private scheduleBulkEmbeddingGeneration(
     userId: number,
-    emails: Array<{ id: string; detail: any; status?: EmailStatus }>,
+    emails: Array<{ id: string; detail: any; email?: Email }>,
   ): void {
-    // Clear existing timeout for this user if any
     const existingTimeout = this.pendingEmbeddingJobs.get(userId);
     if (existingTimeout) {
       clearTimeout(existingTimeout);
     }
 
-    // Schedule bulk embedding generation after 5 seconds delay
-    // This debounces multiple rapid calls (e.g., when user scrolls through pages)
     const timeout = setTimeout(async () => {
       try {
-        // Map emails to search documents
         const docs = emails
-          .map(({ id, detail, status }) =>
-            this.mapToSearchDocument(id, detail, status),
+          .map(({ id, detail, email }) =>
+            this.mapToSearchDocument(id, detail, email),
           )
-          .filter((doc) => doc.bodyText); // Only emails with body text
+          .filter((doc) => doc.bodyText);
 
         if (docs.length > 0) {
           this.logger.log(
             `[AUTO_EMBEDDING] Scheduling bulk embedding generation for ${docs.length} emails (user ${userId})`,
           );
-          
-          // Call bulkIndexEmails which will generate embeddings with proper rate limiting
           await this.searchService.bulkIndexEmails(userId, docs);
         }
       } catch (error) {
@@ -295,10 +317,9 @@ export class EmailService {
           `[AUTO_EMBEDDING] Failed to generate embeddings: ${error.message}`,
         );
       } finally {
-        // Remove from pending jobs
         this.pendingEmbeddingJobs.delete(userId);
       }
-    }, 5000); // 5 second delay to debounce rapid calls
+    }, 5000);
 
     this.pendingEmbeddingJobs.set(userId, timeout);
   }
@@ -328,21 +349,20 @@ export class EmailService {
         break;
       }
 
-      const emailIds = messages.map((m) => m.id);
+      const gmailIds = messages.map((m) => m.id);
 
-      const emailStatuses = await this.emailStatusRepository.find({
-        where: { emailId: In(emailIds), userId },
+      const emails = await this.emailRepository.find({
+        where: { gmailId: In(gmailIds), userId },
+        relations: ['kanbanColumn'],
       });
-      const statusMap = new Map<string, EmailStatus>(
-        emailStatuses.map((s) => [s.emailId, s]),
-      );
+      const emailMap = new Map<string, Email>(emails.map((e) => [e.gmailId, e]));
 
       const docs: EmailSearchDocument[] = [];
       for (const msg of messages) {
         try {
           const detail = await this.gmailService.getEmailDetail(userId, msg.id);
-          const status = statusMap.get(msg.id);
-          const doc = this.mapToSearchDocument(msg.id, detail, status);
+          const email = emailMap.get(msg.id);
+          const doc = this.mapToSearchDocument(msg.id, detail, email);
           docs.push(doc);
         } catch (error) {
           this.logger.error(
@@ -385,7 +405,6 @@ export class EmailService {
       })),
     );
 
-    // Index sent email for search (best-effort)
     try {
       await this.indexEmailForSearch(userId, result.id);
     } catch (error) {
@@ -428,12 +447,10 @@ export class EmailService {
   }
 
   async markAsRead(userId: number, emailId: string): Promise<void> {
-    // Remove UNREAD label to mark as read
     await this.gmailService.modifyEmail(userId, emailId, [], ['UNREAD']);
   }
 
   async markAsUnread(userId: number, emailId: string): Promise<void> {
-    // Add UNREAD label to mark as unread
     await this.gmailService.modifyEmail(userId, emailId, ['UNREAD'], []);
   }
 
@@ -453,247 +470,283 @@ export class EmailService {
     return this.gmailService.getAttachment(userId, messageId, attachmentId);
   }
 
+  /**
+   * Get email kanban status (column name)
+   */
   async getEmailStatus(
     userId: number,
-    emailId: string,
+    gmailId: string,
   ): Promise<EmailStatusResponseDto> {
-    const emailStatus = await this.emailStatusRepository.findOne({
-      where: { userId, emailId },
+    const email = await this.emailRepository.findOne({
+      where: { userId, gmailId },
+      relations: ['kanbanColumn'],
     });
 
     return {
-      emailId,
-      status: emailStatus?.status || KanbanStatus.INBOX,
-      updatedAt: emailStatus?.updatedAt || new Date(),
+      emailId: gmailId,
+      status: email?.kanbanColumn?.name || 'Inbox',
+      kanbanColumnId: email?.kanbanColumnId || null,
+      updatedAt: email?.updatedAt || new Date(),
     };
   }
 
+  /**
+   * Update email kanban status by column ID or column name
+   */
   async updateEmailStatus(
     userId: number,
-    emailId: string,
-    status: string,
+    gmailId: string,
+    statusOrColumnId: string | number,
     gmailLabelId?: string,
     oldGmailLabelId?: string,
   ): Promise<EmailStatusResponseDto> {
     this.logger.log(
-      `[UPDATE_STATUS] Updating email ${emailId} for user ${userId} to status: ${status}`,
-      { gmailLabelId, oldGmailLabelId },
-    );
-    
-    let emailStatus = await this.emailStatusRepository.findOne({
-      where: { userId, emailId },
-    });
-    
-    this.logger.log(
-      `[UPDATE_STATUS] Found email status: ${emailStatus ? 'exists' : 'not found'}`,
+      `[UPDATE_STATUS] Updating email ${gmailId} for user ${userId} to status: ${statusOrColumnId}`,
     );
 
-    if (emailStatus) {
-      const oldStatus = emailStatus.status;
-      emailStatus.status = status;
-      // Clear snoozeUntil when moving OUT of SNOOZED status
-      if (status !== KanbanStatus.SNOOZED && emailStatus.snoozeUntil) {
-        this.logger.log(
-          `[UPDATE_STATUS] Clearing snoozeUntil for email ${emailId} (moving from SNOOZED to ${status})`,
-        );
-        emailStatus.snoozeUntil = null;
+    // Find or determine the target column
+    let targetColumn: KanbanColumn | null = null;
+    
+    if (typeof statusOrColumnId === 'number') {
+      // Direct column ID
+      targetColumn = await this.kanbanColumnRepository.findOne({
+        where: { id: statusOrColumnId, userId },
+      });
+    } else {
+      // Column name (for backwards compatibility)
+      targetColumn = await this.getColumnByName(userId, statusOrColumnId);
+      
+      // If not found, try to match legacy status names
+      if (!targetColumn) {
+        const legacyMapping: Record<string, string> = {
+          'inbox': 'Inbox',
+          'todo': 'To Do',
+          'in-progress': 'In Progress',
+          'done': 'Done',
+          'snoozed': 'Inbox', // Snoozed emails stay in their column, snooze is tracked separately
+        };
+        const mappedName = legacyMapping[statusOrColumnId.toLowerCase()];
+        if (mappedName) {
+          targetColumn = await this.getColumnByName(userId, mappedName);
+        }
       }
-      emailStatus = await this.emailStatusRepository.save(emailStatus);
+    }
+
+    if (!targetColumn) {
+      // Fallback to Inbox
+      targetColumn = await this.getDefaultInboxColumn(userId);
+    }
+
+    // Find or create email record
+    let email = await this.emailRepository.findOne({
+      where: { userId, gmailId },
+    });
+
+    if (email) {
+      email.kanbanColumnId = targetColumn?.id || null;
+      email = await this.emailRepository.save(email);
       this.logger.log(
-        `[UPDATE_STATUS] Updated existing email status from ${oldStatus} to ${emailStatus.status}`,
+        `[UPDATE_STATUS] Updated email ${gmailId} to column ${targetColumn?.name}`,
       );
     } else {
-      emailStatus = this.emailStatusRepository.create({
+      email = this.emailRepository.create({
         userId,
-        emailId,
-        status,
-        snoozeUntil: null, // Ensure snoozeUntil is null for new status entries
+        gmailId,
+        kanbanColumnId: targetColumn?.id || null,
       });
-      emailStatus = await this.emailStatusRepository.save(emailStatus);
+      email = await this.emailRepository.save(email);
       this.logger.log(
-        `[UPDATE_STATUS] Created new email status with status: ${emailStatus.status}`,
+        `[UPDATE_STATUS] Created new email record for ${gmailId} in column ${targetColumn?.name}`,
       );
     }
 
-    // DISABLED: Gmail label sync when updating kanban status
-    // Reason: Kanban status is an app-specific concept and should not affect Gmail labels.
-    // Syncing labels causes emails to be removed from INBOX, making them unfetchable.
-    // If Gmail label sync is needed for specific operations (e.g., archiving), 
-    // it should be handled separately, not as part of kanban status updates.
-    //
-    // const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
-    // const removeLabelIds = oldGmailLabelId && oldGmailLabelId !== gmailLabelId 
-    //   ? [oldGmailLabelId] 
-    //   : [];
-    //
-    // if (addLabelIds.length > 0 || removeLabelIds.length > 0) {
-    //   try {
-    //     await this.gmailService.modifyEmail(userId, emailId, addLabelIds, removeLabelIds);
-    //     this.logger.log(
-    //       `[UPDATE_STATUS] Synced Gmail labels for email ${emailId}: add=${JSON.stringify(addLabelIds)}, remove=${JSON.stringify(removeLabelIds)}`,
-    //     );
-    //   } catch (error) {
-    //     // Log warning but continue - status update in DB should succeed even if Gmail sync fails
-    //     const errorMessage = error instanceof Error ? error.message : String(error);
-    //     this.logger.warn(
-    //       `[UPDATE_STATUS] Failed to sync Gmail labels for email ${emailId}: ${errorMessage}. Status update in DB succeeded.`,
-    //     );
-    //   }
-    // }
+    // If moving away from snoozed, remove snooze schedule
+    if (targetColumn?.name !== 'Inbox') {
+      await this.snoozeScheduleRepository.delete({ emailId: email.id });
+    }
+
+    // Sync labels with Gmail if label IDs are provided
+    if (gmailLabelId || oldGmailLabelId) {
+      try {
+        const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
+        const removeLabelIds = oldGmailLabelId ? [oldGmailLabelId] : [];
+        
+        if (addLabelIds.length > 0 || removeLabelIds.length > 0) {
+          await this.gmailService.modifyEmail(
+            userId,
+            gmailId,
+            addLabelIds,
+            removeLabelIds,
+          );
+          this.logger.log(
+            `[LABEL_SYNC] Synced Gmail labels for ${gmailId}: add=${addLabelIds}, remove=${removeLabelIds}`,
+          );
+        }
+      } catch (error) {
+        // Log error but don't fail the operation - local status is still updated
+        this.logger.warn(
+          `[LABEL_SYNC] Failed to sync Gmail labels for ${gmailId}: ${error.message}`,
+        );
+      }
+    }
 
     return {
-      emailId: emailStatus.emailId,
-      status: emailStatus.status,
-      updatedAt: emailStatus.updatedAt,
+      emailId: gmailId,
+      status: targetColumn?.name || 'Inbox',
+      kanbanColumnId: targetColumn?.id || null,
+      updatedAt: email.updatedAt,
     };
   }
 
+  /**
+   * Get bulk email statuses
+   */
   async getBulkEmailStatuses(
     userId: number,
-    emailIds: string[],
+    gmailIds: string[],
   ): Promise<EmailStatusResponseDto[]> {
-    if (emailIds.length === 0) {
+    if (gmailIds.length === 0) {
       return [];
     }
 
-    const emailStatuses = await this.emailStatusRepository.find({
+    const emails = await this.emailRepository.find({
       where: {
         userId,
-        emailId: In(emailIds),
+        gmailId: In(gmailIds),
       },
+      relations: ['kanbanColumn'],
     });
 
-    // Create a map for quick lookup
-    const statusMap = new Map<string, EmailStatus>();
-    emailStatuses.forEach((status) => {
-      statusMap.set(status.emailId, status);
+    const emailMap = new Map<string, Email>();
+    emails.forEach((email) => {
+      emailMap.set(email.gmailId, email);
     });
 
-    // Return statuses for all requested emails, defaulting to INBOX
-    return emailIds.map((emailId) => {
-      const emailStatus = statusMap.get(emailId);
+    return gmailIds.map((gmailId) => {
+      const email = emailMap.get(gmailId);
       return {
-        emailId,
-        status: emailStatus?.status || KanbanStatus.INBOX,
-        updatedAt: emailStatus?.updatedAt || new Date(),
+        emailId: gmailId,
+        status: email?.kanbanColumn?.name || 'Inbox',
+        kanbanColumnId: email?.kanbanColumnId || null,
+        updatedAt: email?.updatedAt || new Date(),
       };
     });
   }
 
-  async deleteEmailStatus(userId: number, emailId: string): Promise<void> {
-    await this.emailStatusRepository.delete({ userId, emailId });
+  async deleteEmailRecord(userId: number, gmailId: string): Promise<void> {
+    await this.emailRepository.delete({ userId, gmailId });
   }
 
-  // Snooze email until a specific time
+  /**
+   * Snooze email until a specific time
+   */
   async snoozeEmail(
     userId: number,
-    emailId: string,
+    gmailId: string,
     snoozeUntil: Date,
   ): Promise<void> {
     this.logger.log(
-      `[SNOOZE] User ${userId} snoozing email ${emailId} until ${snoozeUntil.toISOString()}`,
+      `[SNOOZE] User ${userId} snoozing email ${gmailId} until ${snoozeUntil.toISOString()}`,
     );
 
-    let emailStatus = await this.emailStatusRepository.findOne({
-      where: { userId, emailId },
+    // Find or create email record
+    let email = await this.emailRepository.findOne({
+      where: { userId, gmailId },
     });
 
-    if (!emailStatus) {
-      this.logger.log(
-        `[SNOOZE] Creating new email status for email ${emailId}`,
-      );
-      emailStatus = this.emailStatusRepository.create({
+    if (!email) {
+      const inboxColumn = await this.getDefaultInboxColumn(userId);
+      email = this.emailRepository.create({
         userId,
-        emailId,
-        status: KanbanStatus.SNOOZED,
-        snoozeUntil,
+        gmailId,
+        kanbanColumnId: inboxColumn?.id || null,
       });
-    } else {
-      this.logger.log(
-        `[SNOOZE] Updating existing email status for email ${emailId} from ${emailStatus.status} to SNOOZED`,
-      );
-      emailStatus.status = KanbanStatus.SNOOZED;
-      emailStatus.snoozeUntil = snoozeUntil;
+      email = await this.emailRepository.save(email);
     }
 
-    await this.emailStatusRepository.save(emailStatus);
+    // Create or update snooze schedule
+    let snooze = await this.snoozeScheduleRepository.findOne({
+      where: { emailId: email.id },
+    });
+
+    if (snooze) {
+      snooze.snoozeUntil = snoozeUntil;
+      snooze.returnToColumnId = email.kanbanColumnId;
+    } else {
+      snooze = this.snoozeScheduleRepository.create({
+        emailId: email.id,
+        snoozeUntil,
+        returnToColumnId: email.kanbanColumnId,
+      });
+    }
+
+    await this.snoozeScheduleRepository.save(snooze);
     this.logger.log(
-      `[SNOOZE] Successfully snoozed email ${emailId} for user ${userId}`,
+      `[SNOOZE] Successfully snoozed email ${gmailId} for user ${userId}`,
     );
   }
 
-  // Unsnooze an email (remove snooze and return to INBOX)
-  async unsnoozeEmail(userId: number, emailId: string): Promise<void> {
-    this.logger.log(`[UNSNOOZE] User ${userId} unsnoozing email ${emailId}`);
+  /**
+   * Unsnooze an email
+   */
+  async unsnoozeEmail(userId: number, gmailId: string): Promise<void> {
+    this.logger.log(`[UNSNOOZE] User ${userId} unsnoozing email ${gmailId}`);
 
-    const emailStatus = await this.emailStatusRepository.findOne({
-      where: { userId, emailId },
+    const email = await this.emailRepository.findOne({
+      where: { userId, gmailId },
     });
 
-    if (emailStatus) {
+    if (email) {
+      await this.snoozeScheduleRepository.delete({ emailId: email.id });
       this.logger.log(
-        `[UNSNOOZE] Found email status for ${emailId}, changing from ${emailStatus.status} to INBOX`,
-      );
-      emailStatus.status = KanbanStatus.INBOX;
-      emailStatus.snoozeUntil = null;
-      await this.emailStatusRepository.save(emailStatus);
-      this.logger.log(
-        `[UNSNOOZE] Successfully unsnoozed email ${emailId} for user ${userId}`,
+        `[UNSNOOZE] Successfully unsnoozed email ${gmailId} for user ${userId}`,
       );
     } else {
       this.logger.warn(
-        `[UNSNOOZE] No email status found for email ${emailId} and user ${userId}`,
+        `[UNSNOOZE] No email record found for ${gmailId} and user ${userId}`,
       );
     }
   }
 
-  // Get all snoozed emails for a user with full email details
+  /**
+   * Get all snoozed emails for a user
+   */
   async getSnoozedEmails(userId: number): Promise<any[]> {
     this.logger.log(`[GET_SNOOZED] Fetching snoozed emails for user ${userId}`);
 
-    // Find all email statuses that have snoozeUntil in the future
-    // This covers both explicit SNOOZED status and any emails with active snooze
     const now = new Date();
-    const snoozedStatuses = await this.emailStatusRepository
-      .createQueryBuilder('status')
-      .where('status.userId = :userId', { userId })
-      .andWhere('status.snoozeUntil > :now', { now })
-      .orderBy('status.snoozeUntil', 'ASC')
-      .getMany();
 
-    this.logger.log(
-      `[GET_SNOOZED] Found ${snoozedStatuses.length} snoozed emails for user ${userId}`,
+    // Get all snooze schedules for this user's emails
+    const snoozedEmails = await this.dataSource.query(
+      `
+      SELECT e."gmailId", s.snooze_until as "snoozeUntil"
+      FROM snooze_schedules s
+      JOIN emails e ON s."emailId" = e.id
+      WHERE e."userId" = $1 AND s.snooze_until > $2
+      ORDER BY s.snooze_until ASC
+      `,
+      [userId, now],
     );
 
-    if (snoozedStatuses.length === 0) {
-      this.logger.log(
-        `[GET_SNOOZED] No snoozed emails found for user ${userId}`,
-      );
+    this.logger.log(
+      `[GET_SNOOZED] Found ${snoozedEmails.length} snoozed emails for user ${userId}`,
+    );
+
+    if (snoozedEmails.length === 0) {
       return [];
     }
 
-    // Fetch email details from Gmail for each snoozed email
+    // Fetch email details from Gmail
     const emailsWithDetails = await Promise.all(
-      snoozedStatuses.map(async (status) => {
-        // Validate emailId
-        if (
-          !status.emailId ||
-          typeof status.emailId !== 'string' ||
-          status.emailId.trim() === ''
-        ) {
-          this.logger.error(
-            `[GET_SNOOZED] Invalid emailId for status ${status.id}: ${status.emailId}`,
-          );
+      snoozedEmails.map(async (snoozed: any) => {
+        if (!snoozed.gmailId) {
           return null;
         }
 
         try {
-          this.logger.log(
-            `[GET_SNOOZED] Fetching Gmail details for email ${status.emailId}`,
-          );
           const emailDetail = await this.gmailService.getEmailDetail(
             userId,
-            status.emailId,
+            snoozed.gmailId,
           );
           return {
             id: emailDetail.id,
@@ -711,19 +764,17 @@ export class EmailService {
             labels: [],
             attachments: emailDetail.attachments || [],
             senderName: this.extractSenderName(emailDetail.from),
-            snoozedUntil: status.snoozeUntil, // Use snoozedUntil for frontend consistency
+            snoozedUntil: snoozed.snoozeUntil,
           };
         } catch (error) {
           this.logger.error(
-            `[GET_SNOOZED] Failed to fetch email ${status.emailId}: ${error.message}`,
+            `[GET_SNOOZED] Failed to fetch email ${snoozed.gmailId}: ${error.message}`,
           );
-          console.error(`Failed to fetch email ${status.emailId}:`, error);
           return null;
         }
       }),
     );
 
-    // Filter out null values (failed fetches)
     const filteredEmails = emailsWithDetails.filter((email) => email !== null);
     this.logger.log(
       `[GET_SNOOZED] Successfully fetched ${filteredEmails.length} snoozed emails for user ${userId}`,
@@ -731,18 +782,117 @@ export class EmailService {
     return filteredEmails;
   }
 
+  /**
+   * Check and restore expired snoozed emails
+   */
+  async checkExpiredSnoozes(userId: number): Promise<string[]> {
+    const now = new Date();
+    this.logger.log(
+      `[CHECK_EXPIRED] Checking expired snoozes for user ${userId} at ${now.toISOString()}`,
+    );
+
+    // Find expired snooze schedules
+    const expiredSnoozes = await this.dataSource.query(
+      `
+      SELECT s.id, s."emailId", s.return_to_column_id, e."gmailId"
+      FROM snooze_schedules s
+      JOIN emails e ON s."emailId" = e.id
+      WHERE e."userId" = $1 AND s.snooze_until <= $2
+      `,
+      [userId, now],
+    );
+
+    this.logger.log(
+      `[CHECK_EXPIRED] Found ${expiredSnoozes.length} expired snoozed emails for user ${userId}`,
+    );
+
+    const restoredGmailIds: string[] = [];
+
+    for (const expired of expiredSnoozes) {
+      // Restore email to its original column (or Inbox if not set)
+      if (expired.return_to_column_id) {
+        await this.emailRepository.update(
+          { id: expired.emailId },
+          { kanbanColumnId: expired.return_to_column_id },
+        );
+      }
+
+      // Delete the snooze schedule
+      await this.snoozeScheduleRepository.delete({ id: expired.id });
+      restoredGmailIds.push(expired.gmailId);
+
+      this.logger.log(
+        `[CHECK_EXPIRED] Restored email ${expired.gmailId} from snooze`,
+      );
+    }
+
+    if (restoredGmailIds.length > 0) {
+      this.logger.log(
+        `[CHECK_EXPIRED] Successfully restored ${restoredGmailIds.length} emails for user ${userId}`,
+      );
+    }
+
+    return restoredGmailIds;
+  }
+
+  /**
+   * Save or update email summary
+   */
+  async saveEmailSummary(
+    userId: number,
+    gmailId: string,
+    summary: string,
+  ): Promise<void> {
+    let email = await this.emailRepository.findOne({
+      where: { userId, gmailId },
+    });
+
+    if (!email) {
+      const inboxColumn = await this.getDefaultInboxColumn(userId);
+      email = this.emailRepository.create({
+        userId,
+        gmailId,
+        kanbanColumnId: inboxColumn?.id || null,
+        summary,
+        summarizedAt: new Date(),
+      });
+    } else {
+      email.summary = summary;
+      email.summarizedAt = new Date();
+    }
+
+    await this.emailRepository.save(email);
+  }
+
+  /**
+   * Get email summary
+   */
+  async getEmailSummary(
+    userId: number,
+    gmailId: string,
+  ): Promise<string | null> {
+    const email = await this.emailRepository.findOne({
+      where: { userId, gmailId },
+    });
+
+    return email?.summary || null;
+  }
+
+  /**
+   * Get email repository for controller access (summary feature)
+   */
+  get emailRepositoryAccess(): Repository<Email> {
+    return this.emailRepository;
+  }
+
   private stripHtmlTags(html: string | undefined | null): string {
     if (!html) return '';
     let text = html;
-    // Remove DOCTYPE and head sections which often contain meta/style only
     text = text.replace(/<!DOCTYPE[\s\S]*?>/gi, ' ');
     text = text.replace(/<head[\s\S]*?<\/head>/gi, ' ');
-    // Remove script and style tags altogether
     text = text.replace(/<script[\s\S]*?<\/script>/gi, ' ');
     text = text.replace(/<style[\s\S]*?<\/style>/gi, ' ');
-    // Remove all remaining HTML tags
     text = text.replace(/<[^>]*>/g, ' ');
-    // Collapse whitespace
     return text.replace(/\s+/g, ' ').trim();
   }
 
@@ -755,91 +905,11 @@ export class EmailService {
     return from.split('@')[0];
   }
 
-  // Check and restore expired snoozed emails
-  async checkExpiredSnoozes(userId: number): Promise<string[]> {
-    const now = new Date();
-    this.logger.log(
-      `[CHECK_EXPIRED] Checking expired snoozes for user ${userId} at ${now.toISOString()}`,
-    );
-
-    // Find all emails with snoozeUntil in the past (expired)
-    const expiredStatuses = await this.emailStatusRepository
-      .createQueryBuilder('status')
-      .where('status.userId = :userId', { userId })
-      .andWhere('status.snoozeUntil IS NOT NULL')
-      .andWhere('status.snoozeUntil <= :now', { now })
-      .getMany();
-
-    this.logger.log(
-      `[CHECK_EXPIRED] Found ${expiredStatuses.length} expired snoozed emails for user ${userId}`,
-    );
-
-    const restoredEmailIds: string[] = [];
-
-    for (const status of expiredStatuses) {
-      this.logger.log(
-        `[CHECK_EXPIRED] Restoring email ${status.emailId} from ${status.status} to INBOX (clearing snooze)`,
-      );
-      status.status = KanbanStatus.INBOX;
-      status.snoozeUntil = null;
-      await this.emailStatusRepository.save(status);
-      restoredEmailIds.push(status.emailId);
-    }
-
-    if (restoredEmailIds.length > 0) {
-      this.logger.log(
-        `[CHECK_EXPIRED] Successfully restored ${restoredEmailIds.length} emails for user ${userId}: ${restoredEmailIds.join(', ')}`,
-      );
-    }
-
-    return restoredEmailIds;
-  }
-
-  // Save or update email summary
-  async saveEmailSummary(
-    userId: number,
-    emailId: string,
-    summary: string,
-  ): Promise<void> {
-    let emailStatus = await this.emailStatusRepository.findOne({
-      where: { userId, emailId },
-    });
-
-    if (!emailStatus) {
-      emailStatus = this.emailStatusRepository.create({
-        userId,
-        emailId,
-        status: KanbanStatus.INBOX,
-        summary,
-        summarizedAt: new Date(),
-      });
-    } else {
-      emailStatus.summary = summary;
-      emailStatus.summarizedAt = new Date();
-    }
-
-    await this.emailStatusRepository.save(emailStatus);
-  }
-
-  // Get email summary
-  async getEmailSummary(
-    userId: number,
-    emailId: string,
-  ): Promise<string | null> {
-    const emailStatus = await this.emailStatusRepository.findOne({
-      where: { userId, emailId },
-    });
-
-    return emailStatus?.summary || null;
-  }
-
   private extractNameFromEmail(email: string): string {
-    // Extract name from "Name <email@example.com>" format
     const match = email.match(/^(.+?)\s*<(.+)>$/);
     if (match) {
       return match[1].trim().replace(/^["']|["']$/g, '');
     }
-    // If no name, return email address
     return email;
   }
 }

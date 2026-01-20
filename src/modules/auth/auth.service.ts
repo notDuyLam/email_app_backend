@@ -20,6 +20,7 @@ import { AuthResponseDto } from './dto/auth-response.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { GmailService } from '../gmail/gmail.service';
+import { KanbanService } from '../kanban/kanban.service';
 
 @Injectable()
 export class AuthService {
@@ -33,6 +34,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private gmailService: GmailService,
+    private kanbanService: KanbanService,
   ) {
     this.googleClient = new OAuth2Client(
       this.configService.get<string>('GOOGLE_CLIENT_ID'),
@@ -60,6 +62,9 @@ export class AuthService {
     });
 
     const savedUser = await this.userRepository.save(newUser);
+
+    // Create default kanban columns for new user
+    await this.kanbanService.createDefaultColumnsForUser(savedUser.id);
 
     // Generate tokens
     return this.generateTokens(savedUser);
@@ -214,6 +219,9 @@ export class AuthService {
           password: null,
         });
         await this.userRepository.save(user);
+
+        // Create default kanban columns for new user
+        await this.kanbanService.createDefaultColumnsForUser(user.id);
       }
 
       return this.generateTokens(user);
@@ -262,6 +270,9 @@ export class AuthService {
           password: null,
         });
         await this.userRepository.save(user);
+
+        // Create default kanban columns for new user
+        await this.kanbanService.createDefaultColumnsForUser(user.id);
       } else {
         if (!user.googleId) {
           user.googleId = userInfo.sub;
