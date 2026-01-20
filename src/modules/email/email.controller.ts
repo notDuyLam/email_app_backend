@@ -32,6 +32,7 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { SendEmailDto } from './dto/send-email.dto';
 import { ReplyEmailDto } from './dto/reply-email.dto';
+import { ForwardEmailDto } from './dto/forward-email.dto';
 import { ModifyEmailDto } from './dto/modify-email.dto';
 import { UpdateEmailStatusDto } from './dto/update-email-status.dto';
 import { BulkEmailStatusRequestDto } from './dto/email-status-response.dto';
@@ -261,6 +262,33 @@ export class EmailDetailController {
     @Body() replyDto: ReplyEmailDto,
   ) {
     return this.emailService.replyEmail(user.userId, emailId, replyDto);
+  }
+
+  @Post(':id/forward')
+  @ApiOperation({ summary: 'Forward an email' })
+  @ApiParam({
+    name: 'id',
+    description: 'Email ID to forward',
+    example: '18c1234567890abcdef',
+  })
+  @ApiBody({ type: ForwardEmailDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Email forwarded successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        threadId: { type: 'string' },
+      },
+    },
+  })
+  async forwardEmail(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') emailId: string,
+    @Body() forwardDto: ForwardEmailDto,
+  ) {
+    return this.emailService.forwardEmail(user.userId, emailId, forwardDto);
   }
 
   @Post(':id/modify')

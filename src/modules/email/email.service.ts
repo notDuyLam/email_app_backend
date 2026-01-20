@@ -10,6 +10,7 @@ import { EmailListResponseDto, EmailListItemDto } from './dto/email-list.dto';
 import { EmailDetailDto } from './dto/email-detail.dto';
 import { SendEmailDto } from './dto/send-email.dto';
 import { ReplyEmailDto } from './dto/reply-email.dto';
+import { ForwardEmailDto } from './dto/forward-email.dto';
 import { ModifyEmailDto } from './dto/modify-email.dto';
 import { EmailStatusResponseDto } from './dto/email-status-response.dto';
 import {
@@ -431,6 +432,35 @@ export class EmailService {
         mimeType: att.mimeType,
       })),
     );
+  }
+
+  async forwardEmail(
+    userId: number,
+    emailId: string,
+    forwardDto: ForwardEmailDto,
+  ): Promise<{ id: string; threadId: string }> {
+    const result = await this.gmailService.forwardEmail(
+      userId,
+      emailId,
+      forwardDto.to,
+      forwardDto.body,
+      forwardDto.attachments?.map((att) => ({
+        filename: att.filename,
+        content: att.content,
+        mimeType: att.mimeType,
+      })),
+    );
+
+    // Index forwarded email for search (best-effort)
+    try {
+      await this.indexEmailForSearch(userId, result.id);
+    } catch (error) {
+      this.logger.error(
+        `Failed to index forwarded email ${result.id} for user ${userId}: ${error.message}`,
+      );
+    }
+
+    return result;
   }
 
   async modifyEmail(

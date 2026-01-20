@@ -732,15 +732,23 @@ export class GmailService {
       const messageId = headers.messageId || '';
       const references = headers.references || messageId;
 
+      // Create reply subject with proper encoding
+      const subject = `Re: ${originalMessage.subject}`;
+      const encodedSubject = /[^\x00-\x7F]/.test(subject)
+        ? `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`
+        : subject;
+
       // Create reply message
       const messageLines: string[] = [];
       messageLines.push(`To: ${originalMessage.from}`);
-      messageLines.push(`Subject: Re: ${originalMessage.subject}`);
+      messageLines.push(`Subject: ${encodedSubject}`);
       messageLines.push(`In-Reply-To: ${messageId}`);
       messageLines.push(`References: ${references}`);
+      messageLines.push('MIME-Version: 1.0');
       messageLines.push('Content-Type: text/html; charset=utf-8');
+      messageLines.push('Content-Transfer-Encoding: base64');
       messageLines.push('');
-      messageLines.push(body);
+      messageLines.push(Buffer.from(body, 'utf-8').toString('base64'));
 
       const message = messageLines.join('\n');
       const encodedMessage = this.encodeMessage(message);
@@ -763,6 +771,122 @@ export class GmailService {
         return this.replyEmail(userId, originalMessageId, body, attachments);
       }
       throw new InternalServerErrorException(`Failed to reply email: ${error.message}`);
+    }
+  }
+
+  async forwardEmail(
+    userId: number,
+    originalMessageId: string,
+    to: string[],
+    body?: string,
+    attachments?: Array<{ filename: string; content: string; mimeType: string }>,
+  ): Promise<{ id: string; threadId: string }> {
+    try {
+      // Get original message details
+      const originalMessage = await this.getEmailDetail(userId, originalMessageId);
+      const gmail = await this.createGmailClient(userId);
+
+      // Create forwarded message subject
+      const subject = originalMessage.subject.startsWith('Fwd:')
+        ? originalMessage.subject
+        : `Fwd: ${originalMessage.subject}`;
+
+      // Encode subject for non-ASCII characters (RFC 2047)
+      const encodedSubject = /[^\x00-\x7F]/.test(subject)
+        ? `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`
+        : subject;
+
+      // Build forward body with original message context
+      const forwardedBody = `
+${body || ''}
+
+---------- Forwarded message ---------
+From: ${originalMessage.from}
+Date: ${new Date(originalMessage.receivedDate).toLocaleString()}
+Subject: ${originalMessage.subject}
+To: ${originalMessage.to.join(', ')}
+
+${originalMessage.body}
+`;
+
+      // Check if we need multipart for attachments
+      if (attachments && attachments.length > 0) {
+        // Create multipart message with attachments
+        const boundary = `boundary_${Date.now()}`;
+        const messageLines: string[] = [];
+        
+        messageLines.push(`To: ${to.join(', ')}`);
+        messageLines.push(`Subject: ${encodedSubject}`);
+        messageLines.push(`MIME-Version: 1.0`);
+        messageLines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+        messageLines.push('');
+        
+        // Add body part
+        messageLines.push(`--${boundary}`);
+        messageLines.push('Content-Type: text/html; charset=utf-8');
+        messageLines.push('Content-Transfer-Encoding: base64');
+        messageLines.push('');
+        messageLines.push(Buffer.from(forwardedBody).toString('base64'));
+        messageLines.push('');
+        
+        // Add attachment parts
+        for (const attachment of attachments) {
+          messageLines.push(`--${boundary}`);
+          messageLines.push(`Content-Type: ${attachment.mimeType}`);
+          messageLines.push(`Content-Disposition: attachment; filename="${attachment.filename}"`);
+          messageLines.push('Content-Transfer-Encoding: base64');
+          messageLines.push('');
+          messageLines.push(attachment.content);
+          messageLines.push('');
+        }
+        
+        messageLines.push(`--${boundary}--`);
+        const message = messageLines.join('\n');
+        const encodedMessage = this.encodeMessage(message);
+
+        const response = await gmail.users.messages.send({
+          userId: 'me',
+          requestBody: {
+            raw: encodedMessage,
+          },
+        });
+
+        return {
+          id: response.data.id || '',
+          threadId: response.data.threadId || '',
+        };
+      } else {
+        // Simple message without attachments - use base64 encoding for body
+        const messageLines: string[] = [];
+        messageLines.push(`To: ${to.join(', ')}`);
+        messageLines.push(`Subject: ${encodedSubject}`);
+        messageLines.push('MIME-Version: 1.0');
+        messageLines.push('Content-Type: text/html; charset=utf-8');
+        messageLines.push('Content-Transfer-Encoding: base64');
+        messageLines.push('');
+        messageLines.push(Buffer.from(forwardedBody, 'utf-8').toString('base64'));
+
+        const message = messageLines.join('\n');
+        const encodedMessage = this.encodeMessage(message);
+
+        const response = await gmail.users.messages.send({
+          userId: 'me',
+          requestBody: {
+            raw: encodedMessage,
+          },
+        });
+
+        return {
+          id: response.data.id || '',
+          threadId: response.data.threadId || '',
+        };
+      }
+    } catch (error: any) {
+      if (error.code === 401) {
+        await this.getAccessToken(userId);
+        return this.forwardEmail(userId, originalMessageId, to, body, attachments);
+      }
+      throw new InternalServerErrorException(`Failed to forward email: ${error.message}`);
     }
   }
 
