@@ -85,30 +85,35 @@ export class SearchService {
         select: ['id'],
       });
 
-      // Generate embedding asynchronously if needed
+      // Generate embedding immediately if needed so semantic search is available right away
       if (
-        false && // DISABLED: Skip individual embedding generation to avoid rate limits
         this.semanticSearchService &&
+        this.semanticSearchService.isEmbeddingServiceAvailable?.() &&
         doc.bodyText &&
         !hasEmbedding
       ) {
-        if (this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
-          setTimeout(() => {
-            this.semanticSearchService
-              .generateAndStoreEmbedding(
-                userId,
-                doc.id,
-                doc.subject,
-                doc.bodyText,
-              )
-              .catch((err: Error) => {
-                if (!err.message.includes('quota') && !err.message.includes('Quota')) {
-                  this.logger.warn(
-                    `Failed to generate embedding for email ${doc.id}: ${err.message}`,
-                  );
-                }
-              });
-          }, Math.random() * 5000);
+        try {
+          await this.semanticSearchService.generateAndStoreEmbedding(
+            userId,
+            doc.id,
+            doc.subject,
+            doc.bodyText,
+          );
+        } catch (err: any) {
+          const errorMessage = err?.message || String(err);
+          if (
+            !errorMessage.includes('quota') &&
+            !errorMessage.includes('Quota') &&
+            !errorMessage.includes('temporarily disabled')
+          ) {
+            this.logger.warn(
+              `Failed to generate embedding for email ${doc.id}: ${errorMessage}`,
+            );
+          } else {
+            this.logger.warn(
+              `Skipping immediate embedding for email ${doc.id} due to provider limits: ${errorMessage}`,
+            );
+          }
         }
       }
     } catch (error) {
