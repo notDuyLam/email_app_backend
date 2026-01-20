@@ -14,5 +14,6 @@ export class EmailDetailDto {
   }>;
   isStarred: boolean;
   isRead: boolean;
+  labelIds?: string[]; // Gmail label IDs (e.g., 'INBOX', 'STARRED', 'Label_123')
 }
 

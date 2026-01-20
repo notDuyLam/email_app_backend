@@ -5,12 +5,13 @@ import { SearchService } from './search.service';
 import { EmbeddingService } from './embedding.service';
 import { SemanticSearchService } from './semantic-search.service';
 import { SearchController } from './search.controller';
-import { EmailStatus } from '../../entities/email-status.entity';
+import { Email } from '../../entities/email.entity';
+import { EmailVector } from '../../entities/email-vector.entity';
 import embeddingConfig from '../../configs/embedding.config';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmailStatus]),
+    TypeOrmModule.forFeature([Email, EmailVector]),
     ConfigModule.forFeature(embeddingConfig),
   ],
   providers: [SearchService, EmbeddingService, SemanticSearchService],

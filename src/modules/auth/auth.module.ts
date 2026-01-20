@@ -10,6 +10,7 @@ import { User } from '../../entities/user.entity';
 import { JwtStrategy } from '../../common/strategies/jwt.strategy';
 import jwtConfig from '../../configs/jwt.config';
 import { GmailModule } from '../gmail/gmail.module';
+import { KanbanModule } from '../kanban/kanban.module';
 
 @Module({
   imports: [
@@ -27,10 +28,10 @@ import { GmailModule } from '../gmail/gmail.module';
     }),
     ConfigModule.forFeature(jwtConfig),
     GmailModule,
+    KanbanModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
   exports: [AuthService],
 })
 export class AuthModule {}
-

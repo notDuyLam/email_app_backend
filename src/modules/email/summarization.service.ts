@@ -55,19 +55,25 @@ export class SummarizationService {
     emailSubject: string,
     emailBody: string,
   ): Promise<string> {
+    // Strip HTML tags from email body before processing
+    const cleanBody = this.stripHtmlTags(emailBody);
+
     // If Google AI is not configured, use fallback summarization
     if (!this.combinations || this.combinations.length === 0) {
-      return this.fallbackSummarization(emailSubject, emailBody);
+      return this.fallbackSummarization(emailSubject, cleanBody);
     }
 
-    const prompt = `Summarize this email in 2-3 clear, concise sentences. Focus on the main points, action items, and key information:
+    // Increase limit to 4000 characters for better context
+    const bodyContent = cleanBody.substring(0, 4000);
+    
+    const prompt = `Summarize this email in 2-3 clear, complete sentences. Focus on the main points, action items, and key information. Do NOT end your summary with "..." - always provide a complete summary.
 
 Subject: ${emailSubject}
 
 Body:
-${emailBody.substring(0, 2000)}${emailBody.length > 2000 ? '...' : ''}
+${bodyContent}
 
-Provide a brief, actionable summary:`;
+Provide a complete, actionable summary (do not truncate):`;
 
     // Try each combination (apiKey + model) until one succeeds
     for (let i = 0; i < this.combinations.length; i++) {
@@ -117,18 +123,62 @@ Provide a brief, actionable summary:`;
       .replace(/\n+/g, ' ')
       .split(/[.!?]+/)
       .filter((s) => s.trim().length > 20)
-      .slice(0, 2);
+      .slice(0, 3); // Take up to 3 sentences
 
     let summary = sentences.join('. ').trim();
 
-    if (summary.length > 200) {
-      summary = summary.substring(0, 197) + '...';
+    // Add period at the end if missing
+    if (summary && !summary.endsWith('.')) {
+      summary += '.';
+    }
+
+    // Increase limit to 500 characters
+    if (summary.length > 500) {
+      // Find the last complete sentence within limit
+      const truncated = summary.substring(0, 500);
+      const lastPeriod = truncated.lastIndexOf('.');
+      if (lastPeriod > 200) {
+        summary = truncated.substring(0, lastPeriod + 1);
+      } else {
+        summary = truncated.trim() + '...';
+      }
     }
 
     if (!summary) {
-      summary = `Email regarding: ${emailSubject}`;
+      summary = `Email về: ${emailSubject}`;
     }
 
     return Promise.resolve(summary);
+  }
+
+  /**
+   * Strip HTML tags from text to get plain text content
+   */
+  private stripHtmlTags(html: string | undefined | null): string {
+    if (!html) return '';
+    let text = html;
+    // Remove DOCTYPE
+    text = text.replace(/<!DOCTYPE[\s\S]*?>/gi, ' ');
+    // Remove head section entirely
+    text = text.replace(/<head[\s\S]*?<\/head>/gi, ' ');
+    // Remove script tags
+    text = text.replace(/<script[\s\S]*?<\/script>/gi, ' ');
+    // Remove style tags
+    text = text.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+    // Replace common block elements with newlines for better readability
+    text = text.replace(/<\/(p|div|br|h[1-6]|li|tr)>/gi, '\n');
+    text = text.replace(/<br\s*\/?>/gi, '\n');
+    // Remove all remaining HTML tags
+    text = text.replace(/<[^>]*>/g, ' ');
+    // Decode HTML entities
+    text = text.replace(/&nbsp;/gi, ' ');
+    text = text.replace(/&amp;/gi, '&');
+    text = text.replace(/&lt;/gi, '<');
+    text = text.replace(/&gt;/gi, '>');
+    text = text.replace(/&quot;/gi, '"');
+    text = text.replace(/&#39;/gi, "'");
+    // Clean up whitespace
+    text = text.replace(/\s+/g, ' ').trim();
+    return text;
   }
 }

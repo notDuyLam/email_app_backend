@@ -10,11 +10,17 @@ import {
 import { EmailService } from './email.service';
 import { SummarizationService } from './summarization.service';
 import { GmailModule } from '../gmail/gmail.module';
-import { EmailStatus } from '../../entities/email-status.entity';
+import { Email } from '../../entities/email.entity';
+import { SnoozeSchedule } from '../../entities/snooze-schedule.entity';
+import { KanbanColumn } from '../../entities/kanban-column.entity';
 import { SearchModule } from '../search/search.module';
 
 @Module({
-  imports: [GmailModule, TypeOrmModule.forFeature([EmailStatus]), SearchModule],
+  imports: [
+    GmailModule,
+    TypeOrmModule.forFeature([Email, SnoozeSchedule, KanbanColumn]),
+    SearchModule,
+  ],
   // IMPORTANT: Controllers with static routes (SnoozeController, SummaryController) must be registered
   // BEFORE controllers with parameterized routes (EmailDetailController) to avoid route conflicts
   controllers: [
@@ -28,4 +34,3 @@ import { SearchModule } from '../search/search.module';
   exports: [EmailService],
 })
 export class EmailModule {}
-

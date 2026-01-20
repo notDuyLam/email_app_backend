@@ -613,15 +613,13 @@ export class SummaryController {
       );
 
       if (existingSummary) {
-        const emailStatus = await this.emailService[
-          'emailStatusRepository'
-        ].findOne({
-          where: { userId: user.userId, emailId },
+        const email = await this.emailService.emailRepositoryAccess.findOne({
+          where: { userId: user.userId, gmailId: emailId },
         });
 
         return {
           summary: existingSummary,
-          summarizedAt: emailStatus?.summarizedAt || new Date(),
+          summarizedAt: email?.summarizedAt || new Date(),
           cached: true,
         };
       }
@@ -672,15 +670,13 @@ export class SummaryController {
       return { summary: null, summarizedAt: null };
     }
 
-    const emailStatus = await this.emailService[
-      'emailStatusRepository'
-    ].findOne({
-      where: { userId: user.userId, emailId },
+    const email = await this.emailService.emailRepositoryAccess.findOne({
+      where: { userId: user.userId, gmailId: emailId },
     });
 
     return {
       summary,
-      summarizedAt: emailStatus?.summarizedAt || new Date(),
+      summarizedAt: email?.summarizedAt || new Date(),
     };
   }
 }

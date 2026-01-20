@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsString, ArrayMinSize } from 'class-validator';
 
 export class EmailStatusResponseDto {
@@ -9,10 +9,16 @@ export class EmailStatusResponseDto {
   emailId: string;
 
   @ApiProperty({
-    description: 'Kanban column status (can be custom column ID)',
-    example: 'todo',
+    description: 'Kanban column name',
+    example: 'To Do',
   })
   status: string;
+
+  @ApiPropertyOptional({
+    description: 'Kanban column ID',
+    example: 2,
+  })
+  kanbanColumnId?: number | null;
 
   @ApiProperty({
     description: 'Last update timestamp',
@@ -32,4 +38,3 @@ export class BulkEmailStatusRequestDto {
   @IsString({ each: true })
   emailIds: string[];
 }
-
