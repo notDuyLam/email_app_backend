@@ -520,12 +520,30 @@ export class EmailService {
   ): Promise<EmailStatusResponseDto> {
     let targetColumn: KanbanColumn | null = null;
 
-    if (typeof statusOrColumnId === 'number') {
+    // Check if it's a number or a numeric string
+    const isNumeric = !isNaN(Number(statusOrColumnId));
+
+    if (typeof statusOrColumnId === 'number' || isNumeric) {
+      const columnId = Number(statusOrColumnId);
       targetColumn = await this.kanbanColumnRepository.findOne({
-        where: { id: statusOrColumnId, userId },
+        where: { id: columnId, userId },
       });
     } else {
-      targetColumn = await this.getColumnByName(userId, statusOrColumnId);
+      // Map frontend IDs to backend names if needed
+      let columnName = statusOrColumnId;
+      const ID_TO_NAME: Record<string, string> = {
+        inbox: 'Inbox',
+        todo: 'To Do',
+        'in-progress': 'In Progress',
+        done: 'Done',
+        snoozed: 'Snoozed', // Should not happen for DB columns but good to have
+      };
+
+      if (ID_TO_NAME[statusOrColumnId.toLowerCase()]) {
+        columnName = ID_TO_NAME[statusOrColumnId.toLowerCase()];
+      }
+
+      targetColumn = await this.getColumnByName(userId, columnName);
     }
 
     if (!targetColumn) {
@@ -601,15 +619,18 @@ export class EmailService {
       emailMap.set(email.gmailId, email);
     });
 
-    return gmailIds.map((gmailId) => {
+    const result = gmailIds.map((gmailId) => {
       const email = emailMap.get(gmailId);
+      const status = email?.kanbanColumn?.name || 'Inbox';
       return {
         emailId: gmailId,
-        status: email?.kanbanColumn?.name || 'Inbox',
+        status: status,
         kanbanColumnId: email?.kanbanColumnId || null,
         updatedAt: email?.updatedAt || new Date(),
       };
     });
+
+    return result;
   }
 
   async deleteEmailRecord(userId: number, gmailId: string): Promise<void> {
