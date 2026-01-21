@@ -24,7 +24,6 @@ import {
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
 
-  // Track pending embedding generation jobs per user to avoid duplicate processing
   private pendingEmbeddingJobs = new Map<number, NodeJS.Timeout>();
 
   constructor(
@@ -58,7 +57,6 @@ export class EmailService {
       snippet: bodyText.substring(0, 200),
       receivedAt: detail.receivedDate?.toISOString?.(),
       status: email?.kanbanColumn?.name || 'Inbox',
-      bodyText: bodyText.substring(0, 5000), // Truncate to 5000 chars for embedding
     };
   }
 
@@ -113,7 +111,6 @@ export class EmailService {
 
     const gmailIds = result.messages.slice(0, pageSize).map((msg) => msg.id);
 
-    // Get emails from our database to check snooze status
     let emailMap = new Map<string, Email>();
     let snoozeMap = new Map<number, SnoozeSchedule>();
 
@@ -122,12 +119,8 @@ export class EmailService {
         where: { gmailId: In(gmailIds), userId },
       });
 
-      this.logger.log(
-        `[GET_EMAILS] Found ${emails.length} cached emails for ${gmailIds.length} emails in mailbox ${mailboxId}`,
-      );
       emailMap = new Map(emails.map((e) => [e.gmailId, e]));
 
-      // Get snooze schedules for these emails
       const emailIds = emails.map((e) => e.id);
       if (emailIds.length > 0) {
         const snoozes = await this.snoozeScheduleRepository.find({
@@ -135,18 +128,14 @@ export class EmailService {
         });
         snoozeMap = new Map(snoozes.map((s) => [s.emailId, s]));
       }
-    } else {
-      this.logger.log(`[GET_EMAILS] No emails found in mailbox ${mailboxId}`);
     }
 
-    // Collect emails for bulk embedding generation
     const emailsForBulkIndex: Array<{
       id: string;
       detail: any;
       email?: Email;
     }> = [];
 
-    // Fetch details for each message
     const emailDetails = await Promise.all(
       result.messages.slice(0, pageSize).map(async (msg) => {
         try {
@@ -154,10 +143,8 @@ export class EmailService {
           const email = emailMap.get(msg.id);
           const snooze = email ? snoozeMap.get(email.id) : null;
 
-          // Collect email for bulk embedding generation
           emailsForBulkIndex.push({ id: msg.id, detail, email });
 
-          // Auto-index email for search (async, don't wait)
           this.indexEmailForSearchAsync(userId, msg.id, detail, email).catch(
             (err) =>
               this.logger.warn(
@@ -191,7 +178,6 @@ export class EmailService {
       }),
     );
 
-    // Schedule bulk embedding generation
     if (emailsForBulkIndex.length > 0) {
       this.scheduleBulkEmbeddingGeneration(userId, emailsForBulkIndex);
     }
@@ -231,7 +217,7 @@ export class EmailService {
       isStarred: false,
       isRead: item.status !== 'Inbox',
       snoozedUntil: null,
-      hasAttachments: false, // Search index doesn't currently support attachments
+      hasAttachments: false,
     }));
 
     return {
@@ -266,9 +252,6 @@ export class EmailService {
     };
   }
 
-  /**
-   * Auto-index email for search (async helper - doesn't throw errors)
-   */
   private async indexEmailForSearchAsync(
     userId: number,
     gmailId: string,
@@ -319,9 +302,6 @@ export class EmailService {
           .filter((doc) => doc.bodyText);
 
         if (docs.length > 0) {
-          this.logger.log(
-            `[AUTO_EMBEDDING] Scheduling bulk embedding generation for ${docs.length} emails (user ${userId})`,
-          );
           await this.searchService.bulkIndexEmails(userId, docs);
         }
       } catch (error) {
@@ -394,10 +374,6 @@ export class EmailService {
       }
     }
 
-    this.logger.log(
-      `[REINDEX] Indexed ${totalIndexed} emails for user ${userId} in mailbox ${mailboxId}`,
-    );
-
     return { indexed: totalIndexed };
   }
 
@@ -464,7 +440,6 @@ export class EmailService {
       })),
     );
 
-    // Index forwarded email for search (best-effort)
     try {
       await this.indexEmailForSearch(userId, result.id);
     } catch (error) {
@@ -543,44 +518,20 @@ export class EmailService {
     gmailLabelId?: string,
     oldGmailLabelId?: string,
   ): Promise<EmailStatusResponseDto> {
-    this.logger.log(
-      `[UPDATE_STATUS] Updating email ${gmailId} for user ${userId} to status: ${statusOrColumnId}`,
-    );
-
-    // Find or determine the target column
     let targetColumn: KanbanColumn | null = null;
 
     if (typeof statusOrColumnId === 'number') {
-      // Direct column ID
       targetColumn = await this.kanbanColumnRepository.findOne({
         where: { id: statusOrColumnId, userId },
       });
     } else {
-      // Column name (for backwards compatibility)
       targetColumn = await this.getColumnByName(userId, statusOrColumnId);
-
-      // If not found, try to match legacy status names
-      if (!targetColumn) {
-        const legacyMapping: Record<string, string> = {
-          inbox: 'Inbox',
-          todo: 'To Do',
-          'in-progress': 'In Progress',
-          done: 'Done',
-          snoozed: 'Inbox', // Snoozed emails stay in their column, snooze is tracked separately
-        };
-        const mappedName = legacyMapping[statusOrColumnId.toLowerCase()];
-        if (mappedName) {
-          targetColumn = await this.getColumnByName(userId, mappedName);
-        }
-      }
     }
 
     if (!targetColumn) {
-      // Fallback to Inbox
       targetColumn = await this.getDefaultInboxColumn(userId);
     }
 
-    // Find or create email record
     let email = await this.emailRepository.findOne({
       where: { userId, gmailId },
     });
@@ -588,9 +539,6 @@ export class EmailService {
     if (email) {
       email.kanbanColumnId = targetColumn?.id || null;
       email = await this.emailRepository.save(email);
-      this.logger.log(
-        `[UPDATE_STATUS] Updated email ${gmailId} to column ${targetColumn?.name}`,
-      );
     } else {
       email = this.emailRepository.create({
         userId,
@@ -598,17 +546,8 @@ export class EmailService {
         kanbanColumnId: targetColumn?.id || null,
       });
       email = await this.emailRepository.save(email);
-      this.logger.log(
-        `[UPDATE_STATUS] Created new email record for ${gmailId} in column ${targetColumn?.name}`,
-      );
     }
 
-    // If moving away from snoozed, remove snooze schedule
-    if (targetColumn?.name !== 'Inbox') {
-      await this.snoozeScheduleRepository.delete({ emailId: email.id });
-    }
-
-    // Sync labels with Gmail if label IDs are provided
     if (gmailLabelId || oldGmailLabelId) {
       try {
         const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
@@ -620,9 +559,6 @@ export class EmailService {
             gmailId,
             addLabelIds,
             removeLabelIds,
-          );
-          this.logger.log(
-            `[LABEL_SYNC] Synced Gmail labels for ${gmailId}: add=${addLabelIds}, remove=${removeLabelIds}`,
           );
         }
       } catch (error) {
@@ -688,11 +624,6 @@ export class EmailService {
     gmailId: string,
     snoozeUntil: Date,
   ): Promise<void> {
-    this.logger.log(
-      `[SNOOZE] User ${userId} snoozing email ${gmailId} until ${snoozeUntil.toISOString()}`,
-    );
-
-    // Find or create email record
     let email = await this.emailRepository.findOne({
       where: { userId, gmailId },
     });
@@ -707,7 +638,6 @@ export class EmailService {
       email = await this.emailRepository.save(email);
     }
 
-    // Create or update snooze schedule
     let snooze = await this.snoozeScheduleRepository.findOne({
       where: { emailId: email.id },
     });
@@ -724,26 +654,18 @@ export class EmailService {
     }
 
     await this.snoozeScheduleRepository.save(snooze);
-    this.logger.log(
-      `[SNOOZE] Successfully snoozed email ${gmailId} for user ${userId}`,
-    );
   }
 
   /**
    * Unsnooze an email
    */
   async unsnoozeEmail(userId: number, gmailId: string): Promise<void> {
-    this.logger.log(`[UNSNOOZE] User ${userId} unsnoozing email ${gmailId}`);
-
     const email = await this.emailRepository.findOne({
       where: { userId, gmailId },
     });
 
     if (email) {
       await this.snoozeScheduleRepository.delete({ emailId: email.id });
-      this.logger.log(
-        `[UNSNOOZE] Successfully unsnoozed email ${gmailId} for user ${userId}`,
-      );
     } else {
       this.logger.warn(
         `[UNSNOOZE] No email record found for ${gmailId} and user ${userId}`,
@@ -755,11 +677,8 @@ export class EmailService {
    * Get all snoozed emails for a user
    */
   async getSnoozedEmails(userId: number): Promise<any[]> {
-    this.logger.log(`[GET_SNOOZED] Fetching snoozed emails for user ${userId}`);
-
     const now = new Date();
 
-    // Get all snooze schedules for this user's emails
     const snoozedEmails = await this.dataSource.query(
       `
       SELECT e."gmailId", s.snooze_until as "snoozeUntil"
@@ -771,15 +690,10 @@ export class EmailService {
       [userId, now],
     );
 
-    this.logger.log(
-      `[GET_SNOOZED] Found ${snoozedEmails.length} snoozed emails for user ${userId}`,
-    );
-
     if (snoozedEmails.length === 0) {
       return [];
     }
 
-    // Fetch email details from Gmail
     const emailsWithDetails = await Promise.all(
       snoozedEmails.map(async (snoozed: any) => {
         if (!snoozed.gmailId) {
@@ -834,7 +748,6 @@ export class EmailService {
       `[CHECK_EXPIRED] Checking expired snoozes for user ${userId} at ${now.toISOString()}`,
     );
 
-    // Find expired snooze schedules
     const expiredSnoozes = await this.dataSource.query(
       `
       SELECT s.id, s."emailId", s.return_to_column_id, e."gmailId"
@@ -845,14 +758,9 @@ export class EmailService {
       [userId, now],
     );
 
-    this.logger.log(
-      `[CHECK_EXPIRED] Found ${expiredSnoozes.length} expired snoozed emails for user ${userId}`,
-    );
-
     const restoredGmailIds: string[] = [];
 
     for (const expired of expiredSnoozes) {
-      // Restore email to its original column (or Inbox if not set)
       if (expired.return_to_column_id) {
         await this.emailRepository.update(
           { id: expired.emailId },
@@ -860,19 +768,8 @@ export class EmailService {
         );
       }
 
-      // Delete the snooze schedule
       await this.snoozeScheduleRepository.delete({ id: expired.id });
       restoredGmailIds.push(expired.gmailId);
-
-      this.logger.log(
-        `[CHECK_EXPIRED] Restored email ${expired.gmailId} from snooze`,
-      );
-    }
-
-    if (restoredGmailIds.length > 0) {
-      this.logger.log(
-        `[CHECK_EXPIRED] Successfully restored ${restoredGmailIds.length} emails for user ${userId}`,
-      );
     }
 
     return restoredGmailIds;

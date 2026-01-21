@@ -9,23 +9,23 @@ type FeatureExtractionPipeline = any;
 @Injectable()
 export class EmbeddingService implements OnModuleInit {
   private readonly logger = new Logger(EmbeddingService.name);
-  
+
   // Provider type
   private provider: EmbeddingProvider = EmbeddingProvider.LOCAL;
   private embeddingDimensions = 384; // Default to local model dimensions
-  
+
   // Gemini-specific
   private genAI: GoogleGenerativeAI | null = null;
   private geminiModel: any = null;
-  
+
   // Local model (all-MiniLM-L6-v2)
   private localModel: FeatureExtractionPipeline | null = null;
   private isLocalModelLoading = false;
-  
+
   // Rate limiting (only for Gemini)
   private lastRequestTime: number = 0;
   private readonly minRequestDelay = 1000;
-  
+
   // Quota tracking (only for Gemini)
   private quotaExceeded: boolean = false;
   private quotaExceededUntil: number = 0;
@@ -35,7 +35,7 @@ export class EmbeddingService implements OnModuleInit {
   constructor(private configService: ConfigService) {
     const embeddingConfig = this.configService.get('embedding');
     this.provider = embeddingConfig?.provider || EmbeddingProvider.LOCAL;
-    
+
     if (this.provider === EmbeddingProvider.GEMINI) {
       this.initializeGemini(embeddingConfig);
     } else {
@@ -56,8 +56,9 @@ export class EmbeddingService implements OnModuleInit {
    * Initialize Gemini embedding model
    */
   private initializeGemini(embeddingConfig: any): void {
-    const apiKey = embeddingConfig?.gemini?.apiKey || process.env.GEMINI_API_KEY;
-    
+    const apiKey =
+      embeddingConfig?.gemini?.apiKey || process.env.GEMINI_API_KEY;
+
     if (!apiKey || apiKey === '') {
       this.logger.warn(
         'GEMINI_API_KEY not configured. Falling back to LOCAL embedding model.',
@@ -97,23 +98,20 @@ export class EmbeddingService implements OnModuleInit {
 
     this.isLocalModelLoading = true;
     const embeddingConfig = this.configService.get('embedding');
-    const modelName = embeddingConfig?.local?.model || 'Xenova/all-MiniLM-L6-v2';
+    const modelName =
+      embeddingConfig?.local?.model || 'Xenova/all-MiniLM-L6-v2';
 
     try {
       this.logger.log(`Loading local embedding model: ${modelName}...`);
-      
+
       // Dynamic import of @xenova/transformers (ES Module)
       const { pipeline } = await import('@xenova/transformers');
-      
+
       // Load the model - this will download it on first use (~90MB)
       // Subsequent runs will use cached model
-      this.localModel = await pipeline(
-        'feature-extraction',
-        modelName,
-        {
-          quantized: true, // Use quantized model for smaller size and faster inference
-        },
-      );
+      this.localModel = await pipeline('feature-extraction', modelName, {
+        quantized: true, // Use quantized model for smaller size and faster inference
+      });
 
       this.logger.log(
         `Local embedding model loaded successfully: ${modelName} (${this.embeddingDimensions} dimensions)`,
@@ -160,12 +158,16 @@ export class EmbeddingService implements OnModuleInit {
    */
   private async generateEmbeddingGemini(text: string): Promise<number[]> {
     if (!this.geminiModel) {
-      throw new Error('Gemini embedding model not initialized. Check GEMINI_API_KEY.');
+      throw new Error(
+        'Gemini embedding model not initialized. Check GEMINI_API_KEY.',
+      );
     }
 
     // Check if quota is exceeded
     if (this.isQuotaExceeded()) {
-      throw new Error('Embedding generation is temporarily disabled due to quota limits. Please try again later.');
+      throw new Error(
+        'Embedding generation is temporarily disabled due to quota limits. Please try again later.',
+      );
     }
 
     // Rate limiting
@@ -220,14 +222,27 @@ export class EmbeddingService implements OnModuleInit {
         error instanceof Error ? error.message : String(error);
 
       // Check for quota exceeded error (429)
-      if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('Quota exceeded')) {
+      if (
+        errorMessage.includes('429') ||
+        errorMessage.includes('quota') ||
+        errorMessage.includes('Quota exceeded')
+      ) {
         this.handleQuotaError();
-        this.quotaCooldownMs = Math.min(this.quotaCooldownMs * 1.5, 24 * 60 * 60 * 1000);
-        throw new Error('Embedding generation quota exceeded. Please try again later.');
+        this.quotaCooldownMs = Math.min(
+          this.quotaCooldownMs * 1.5,
+          24 * 60 * 60 * 1000,
+        );
+        throw new Error(
+          'Embedding generation quota exceeded. Please try again later.',
+        );
       }
 
       // Check for rate limit errors
-      if (errorMessage.includes('429') || errorMessage.includes('503') || errorMessage.includes('rate limit')) {
+      if (
+        errorMessage.includes('429') ||
+        errorMessage.includes('503') ||
+        errorMessage.includes('rate limit')
+      ) {
         const backoffDelay = Math.min(60000, 1000 * Math.pow(2, 3));
         this.logger.warn(
           `Rate limit detected, will wait ${backoffDelay}ms before next request`,
@@ -255,19 +270,21 @@ export class EmbeddingService implements OnModuleInit {
           attempts++;
         }
       }
-      
+
       if (!this.localModel) {
         await this.initializeLocalModel();
       }
-      
+
       if (!this.localModel) {
-        throw new Error('Local embedding model failed to load. Please check logs.');
+        throw new Error(
+          'Local embedding model failed to load. Please check logs.',
+        );
       }
     }
 
     try {
       const processedText = this.preprocessText(text, 512); // Local model token limit
-      
+
       // Generate embedding using local model
       const result = await this.localModel(processedText, {
         pooling: 'mean', // Mean pooling for sentence embeddings
@@ -326,7 +343,9 @@ export class EmbeddingService implements OnModuleInit {
   /**
    * Generate embeddings batch using Gemini (sequential)
    */
-  private async generateEmbeddingsBatchGemini(texts: string[]): Promise<number[][]> {
+  private async generateEmbeddingsBatchGemini(
+    texts: string[],
+  ): Promise<number[][]> {
     const embeddings: number[][] = [];
     const errors: string[] = [];
 
@@ -371,7 +390,9 @@ export class EmbeddingService implements OnModuleInit {
   /**
    * Generate embeddings batch using local model (parallel)
    */
-  private async generateEmbeddingsBatchLocal(texts: string[]): Promise<number[][]> {
+  private async generateEmbeddingsBatchLocal(
+    texts: string[],
+  ): Promise<number[][]> {
     if (!this.localModel) {
       await this.initializeLocalModel();
       if (!this.localModel) {
@@ -380,8 +401,10 @@ export class EmbeddingService implements OnModuleInit {
     }
 
     try {
-      const processedTexts = texts.map(text => this.preprocessText(text, 512));
-      
+      const processedTexts = texts.map((text) =>
+        this.preprocessText(text, 512),
+      );
+
       // Process all texts in parallel (local model can handle this)
       const results = await Promise.all(
         processedTexts.map(async (text) => {
@@ -402,15 +425,19 @@ export class EmbeddingService implements OnModuleInit {
 
             return embedding;
           } catch (error) {
-            this.logger.warn(`Failed to generate embedding for text: ${error.message}`);
+            this.logger.warn(
+              `Failed to generate embedding for text: ${error.message}`,
+            );
             return null;
           }
-        })
+        }),
       );
 
       return results.filter((e) => e !== null) as number[][];
     } catch (error) {
-      this.logger.error(`Failed to generate batch embeddings: ${error.message}`);
+      this.logger.error(
+        `Failed to generate batch embeddings: ${error.message}`,
+      );
       throw error;
     }
   }
@@ -496,4 +523,3 @@ export class EmbeddingService implements OnModuleInit {
     return this.provider;
   }
 }
-

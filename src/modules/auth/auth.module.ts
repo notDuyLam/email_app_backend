@@ -21,7 +21,9 @@ import { KanbanModule } from '../kanban/kanban.module';
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('jwt.accessSecret'),
         signOptions: {
-          expiresIn: configService.get<string>('jwt.accessExpiresIn') as StringValue,
+          expiresIn: configService.get<string>(
+            'jwt.accessExpiresIn',
+          ) as StringValue,
         },
       }),
       inject: [ConfigService],

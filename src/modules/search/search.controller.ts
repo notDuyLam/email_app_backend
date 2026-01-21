@@ -28,9 +28,7 @@ import {
 @Controller('search')
 @UseGuards(JwtAuthGuard)
 export class SearchController {
-  constructor(
-    private readonly semanticSearchService: SemanticSearchService,
-  ) {}
+  constructor(private readonly semanticSearchService: SemanticSearchService) {}
 
   @Post('semantic')
   @HttpCode(HttpStatus.OK)
@@ -85,4 +83,3 @@ export class SearchController {
     };
   }
 }
-

@@ -54,7 +54,3 @@ export class EmailSearchQueryDto {
   @IsOptional()
   sort?: SortOption = SortOption.RELEVANCE;
 }
-
-
-
-

@@ -131,7 +131,10 @@ export class KanbanController {
     @CurrentUser() user: CurrentUserPayload,
     @Body() dto: ReorderColumnsDto,
   ): Promise<KanbanColumnsListResponseDto> {
-    const columns = await this.kanbanService.reorderColumns(user.userId, dto.columnIds);
+    const columns = await this.kanbanService.reorderColumns(
+      user.userId,
+      dto.columnIds,
+    );
     return { columns };
   }
 }

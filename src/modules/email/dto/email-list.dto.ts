@@ -17,4 +17,3 @@ export class EmailListResponseDto {
   pageSize: number;
   nextPageToken?: string;
 }
-

@@ -44,7 +44,6 @@ export class SearchService {
     private readonly emailVectorRepository: Repository<EmailVector>,
   ) {}
 
-  // Note: SemanticSearchService is injected separately to avoid circular dependency
   private semanticSearchService: any = null;
 
   setSemanticSearchService(service: any): void {
@@ -56,7 +55,6 @@ export class SearchService {
    */
   async indexEmail(userId: number, doc: EmailSearchDocument): Promise<void> {
     try {
-      // Find existing email or create new one
       let email = await this.emailRepository.findOne({
         where: { userId, gmailId: doc.id },
       });
@@ -68,7 +66,6 @@ export class SearchService {
         });
       }
 
-      // Update search-related fields
       email.subject = doc.subject;
       email.senderName = doc.senderName;
       email.senderEmail = doc.senderEmail;
@@ -79,13 +76,11 @@ export class SearchService {
       await this.emailRepository.save(email);
       this.logger.log(`Indexed email ${doc.id} for user ${userId}`);
 
-      // Check if embedding exists for this email
       const hasEmbedding = await this.emailVectorRepository.findOne({
         where: { emailId: email.id },
         select: ['id'],
       });
 
-      // Generate embedding immediately if needed so semantic search is available right away
       if (
         this.semanticSearchService &&
         this.semanticSearchService.isEmbeddingServiceAvailable?.() &&
@@ -161,9 +156,10 @@ export class SearchService {
       await this.emailRepository.save(emails);
       this.logger.log(`Bulk indexed ${docs.length} emails for user ${userId}`);
 
-      // Generate embeddings asynchronously
-      if (this.semanticSearchService && this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
-        // Get email IDs that were just saved
+      if (
+        this.semanticSearchService &&
+        this.semanticSearchService.isEmbeddingServiceAvailable?.()
+      ) {
         const savedEmails = await this.emailRepository.find({
           where: emails.map((e) => ({ userId, gmailId: e.gmailId })),
           select: ['id', 'gmailId'],
@@ -171,21 +167,20 @@ export class SearchService {
 
         const emailIdMap = new Map(savedEmails.map((e) => [e.gmailId, e.id]));
 
-        // Check which emails already have embeddings
         const emailIds = savedEmails.map((e) => e.id);
         const existingVectors = await this.emailVectorRepository.find({
           where: emailIds.map((id) => ({ emailId: id })),
           select: ['emailId'],
         });
 
-        const existingEmbeddingIds = new Set(existingVectors.map((v) => v.emailId));
+        const existingEmbeddingIds = new Set(
+          existingVectors.map((v) => v.emailId),
+        );
 
-        // Filter emails that need embeddings
-        const emailsNeedingEmbeddings = docs
-          .filter((doc) => {
-            const emailId = emailIdMap.get(doc.id);
-            return doc.bodyText && emailId && !existingEmbeddingIds.has(emailId);
-          });
+        const emailsNeedingEmbeddings = docs.filter((doc) => {
+          const emailId = emailIdMap.get(doc.id);
+          return doc.bodyText && emailId && !existingEmbeddingIds.has(emailId);
+        });
 
         if (emailsNeedingEmbeddings.length === 0) {
           return;
@@ -197,7 +192,6 @@ export class SearchService {
 
         const delayBetweenEmails = 0;
 
-        // Process in background
         (async () => {
           for (let i = 0; i < emailsNeedingEmbeddings.length; i++) {
             const doc = emailsNeedingEmbeddings[i];
@@ -242,8 +236,13 @@ export class SearchService {
               );
             }
 
-            if (i < emailsNeedingEmbeddings.length - 1 && delayBetweenEmails > 0) {
-              await new Promise((resolve) => setTimeout(resolve, delayBetweenEmails));
+            if (
+              i < emailsNeedingEmbeddings.length - 1 &&
+              delayBetweenEmails > 0
+            ) {
+              await new Promise((resolve) =>
+                setTimeout(resolve, delayBetweenEmails),
+              );
             }
           }
 
@@ -255,7 +254,10 @@ export class SearchService {
             `Error in bulk embedding generation: ${err.message}`,
           );
         });
-      } else if (this.semanticSearchService && !this.semanticSearchService.isEmbeddingServiceAvailable?.()) {
+      } else if (
+        this.semanticSearchService &&
+        !this.semanticSearchService.isEmbeddingServiceAvailable?.()
+      ) {
         this.logger.debug(
           'Skipping embedding generation: embedding service unavailable',
         );
@@ -286,7 +288,6 @@ export class SearchService {
         `[SEARCH] User ${userId} searching for: "${query}" (page: ${page}, limit: ${limit})`,
       );
 
-      // Build the base query
       let queryBuilder = this.emailRepository
         .createQueryBuilder('email')
         .leftJoinAndSelect('email.kanbanColumn', 'kanbanColumn')
@@ -295,7 +296,6 @@ export class SearchService {
           '(email.subject IS NOT NULL OR email.senderName IS NOT NULL OR email.senderEmail IS NOT NULL)',
         );
 
-      // Apply filters
       if (filters?.unreadOnly) {
         queryBuilder = queryBuilder.andWhere("kanbanColumn.name = 'Inbox'");
       }
@@ -313,7 +313,6 @@ export class SearchService {
         });
       }
 
-      // Fuzzy search implementation
       if (query && query.trim()) {
         const searchTerm = query.trim();
 
@@ -353,7 +352,6 @@ export class SearchService {
         queryBuilder = queryBuilder.addSelect('1', 'relevance_score');
       }
 
-      // Apply sorting
       if (sort === SortOption.RELEVANCE && query && query.trim()) {
         queryBuilder = queryBuilder.orderBy('relevance_score', 'DESC');
         queryBuilder = queryBuilder.addOrderBy('email.receivedAt', 'DESC');
@@ -363,10 +361,8 @@ export class SearchService {
         queryBuilder = queryBuilder.orderBy('email.receivedAt', 'ASC');
       }
 
-      // Get total count
       const total = await queryBuilder.getCount();
 
-      // Get paginated results
       const results = await queryBuilder
         .offset(offset)
         .limit(limit)

@@ -70,7 +70,7 @@ export class GmailService {
       const tempOAuth2Client = new OAuth2Client(
         this.configService.get<string>('gmail.clientId'),
         this.configService.get<string>('gmail.clientSecret'),
-        this.configService.get<string>('gmail.redirectUri')
+        this.configService.get<string>('gmail.redirectUri'),
       );
       tempOAuth2Client.setCredentials({
         access_token: tokens.access_token,
@@ -83,7 +83,9 @@ export class GmailService {
       const email = profile.data.emailAddress;
 
       if (!email) {
-        throw new BadRequestException('Unable to retrieve user email from Gmail profile');
+        throw new BadRequestException(
+          'Unable to retrieve user email from Gmail profile',
+        );
       }
 
       return {
@@ -148,7 +150,9 @@ export class GmailService {
     const token = await this.getStoredToken(userId);
 
     if (!token) {
-      throw new UnauthorizedException('Gmail not connected. Please connect your Gmail account.');
+      throw new UnauthorizedException(
+        'Gmail not connected. Please connect your Gmail account.',
+      );
     }
 
     // Check if access token is still valid
@@ -193,13 +197,20 @@ export class GmailService {
       const expiry = credentials.expiry_date
         ? new Date(credentials.expiry_date)
         : null;
-      await this.saveToken(userId, refreshToken, credentials.access_token, credentials.expiry_date);
+      await this.saveToken(
+        userId,
+        refreshToken,
+        credentials.access_token,
+        credentials.expiry_date,
+      );
 
       return credentials.access_token;
     } catch (error) {
       // If refresh fails, clear tokens
       await this.clearToken(userId);
-      throw new UnauthorizedException('Gmail token expired. Please reconnect your account.');
+      throw new UnauthorizedException(
+        'Gmail token expired. Please reconnect your account.',
+      );
     }
   }
 
@@ -234,7 +245,8 @@ export class GmailService {
   }
 
   private getHeader(headers: any[], name: string): string | undefined {
-    return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+    return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())
+      ?.value;
   }
 
   private decodeBody(data: string): string {
@@ -261,7 +273,10 @@ export class GmailService {
     };
   }
 
-  private parseEmailBody(payload: any): { text: string | null; html: string | null } {
+  private parseEmailBody(payload: any): {
+    text: string | null;
+    html: string | null;
+  } {
     let text: string | null = null;
     let html: string | null = null;
 
@@ -344,7 +359,9 @@ export class GmailService {
   }
 
   // Gmail API Operations
-  async getMailboxes(userId: number): Promise<Array<{ id: string; name: string; unreadCount?: number }>> {
+  async getMailboxes(
+    userId: number,
+  ): Promise<Array<{ id: string; name: string; unreadCount?: number }>> {
     try {
       const gmail = await this.createGmailClient(userId);
       const response = await gmail.users.labels.list({ userId: 'me' });
@@ -354,16 +371,24 @@ export class GmailService {
       }
 
       // Filter out system labels that shouldn't be shown as mailboxes
-      const hiddenLabels = ['CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS'];
+      const hiddenLabels = [
+        'CATEGORY_PERSONAL',
+        'CATEGORY_SOCIAL',
+        'CATEGORY_PROMOTIONS',
+        'CATEGORY_UPDATES',
+        'CATEGORY_FORUMS',
+      ];
 
       return response.data.labels
         .filter((label) => {
           // Show system labels like INBOX, SENT, DRAFT, etc.
           // Hide category labels and labels that are not visible
           return (
-            label.type === 'system' ||
-            (label.type === 'user' && label.labelListVisibility !== 'labelHide')
-          ) && !hiddenLabels.includes(label.id || '');
+            (label.type === 'system' ||
+              (label.type === 'user' &&
+                label.labelListVisibility !== 'labelHide')) &&
+            !hiddenLabels.includes(label.id || '')
+          );
         })
         .map((label) => ({
           id: label.id || '',
@@ -378,14 +403,20 @@ export class GmailService {
         const response = await gmail.users.labels.list({ userId: 'me' });
         if (!response.data.labels) return [];
         return response.data.labels
-          .filter((label) => label.type === 'system' || label.labelListVisibility !== 'labelHide')
+          .filter(
+            (label) =>
+              label.type === 'system' ||
+              label.labelListVisibility !== 'labelHide',
+          )
           .map((label) => ({
             id: label.id || '',
             name: label.name || '',
             unreadCount: label.messagesUnread,
           }));
       }
-      throw new InternalServerErrorException(`Failed to fetch mailboxes: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to fetch mailboxes: ${error.message}`,
+      );
     }
   }
 
@@ -404,7 +435,8 @@ export class GmailService {
     try {
       const gmail = await this.createGmailClient(userId);
 
-      const isAll = labelId === 'ALL' || labelId === 'ALL_MAIL' || labelId === 'ALL_EMAILS';
+      const isAll =
+        labelId === 'ALL' || labelId === 'ALL_MAIL' || labelId === 'ALL_EMAILS';
 
       // Build query for search
       // - For specific labels: keep `in:<label>` behavior
@@ -439,7 +471,10 @@ export class GmailService {
         await this.getAccessToken(userId);
         const gmail = await this.createGmailClient(userId);
 
-        const isAll = labelId === 'ALL' || labelId === 'ALL_MAIL' || labelId === 'ALL_EMAILS';
+        const isAll =
+          labelId === 'ALL' ||
+          labelId === 'ALL_MAIL' ||
+          labelId === 'ALL_EMAILS';
 
         // Build query for search on retry
         let q: string | undefined = undefined;
@@ -467,11 +502,16 @@ export class GmailService {
           total: response.data.resultSizeEstimate || 0,
         };
       }
-      throw new InternalServerErrorException(`Failed to fetch emails: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to fetch emails: ${error.message}`,
+      );
     }
   }
 
-  async getEmailDetail(userId: number, messageId: string): Promise<{
+  async getEmailDetail(
+    userId: number,
+    messageId: string,
+  ): Promise<{
     id: string;
     threadId: string;
     from: string;
@@ -481,7 +521,12 @@ export class GmailService {
     receivedDate: Date;
     body: string;
     html?: string;
-    attachments: Array<{ id: string; name: string; size: number; type: string }>;
+    attachments: Array<{
+      id: string;
+      name: string;
+      size: number;
+      type: string;
+    }>;
     isStarred: boolean;
     isRead: boolean;
     labelIds: string[];
@@ -544,7 +589,9 @@ export class GmailService {
       if (error instanceof BadRequestException) {
         throw error;
       }
-      throw new InternalServerErrorException(`Failed to fetch email detail: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to fetch email detail: ${error.message}`,
+      );
     }
   }
 
@@ -608,7 +655,9 @@ export class GmailService {
       if (error instanceof BadRequestException) {
         throw error;
       }
-      throw new InternalServerErrorException(`Failed to fetch attachment: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to fetch attachment: ${error.message}`,
+      );
     }
   }
 
@@ -619,7 +668,11 @@ export class GmailService {
     body: string,
     cc?: string[],
     bcc?: string[],
-    attachments?: Array<{ filename: string; content: string; mimeType: string }>,
+    attachments?: Array<{
+      filename: string;
+      content: string;
+      mimeType: string;
+    }>,
   ): Promise<{ id: string; threadId: string }> {
     try {
       const gmail = await this.createGmailClient(userId);
@@ -646,7 +699,9 @@ export class GmailService {
         }
         messageLines.push(`Subject: ${subject}`);
         messageLines.push(`MIME-Version: 1.0`);
-        messageLines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+        messageLines.push(
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        );
         messageLines.push('');
 
         // Add body part
@@ -661,7 +716,9 @@ export class GmailService {
         for (const attachment of attachments) {
           messageLines.push(`--${boundary}`);
           messageLines.push(`Content-Type: ${attachment.mimeType}`);
-          messageLines.push(`Content-Disposition: attachment; filename="${attachment.filename}"`);
+          messageLines.push(
+            `Content-Disposition: attachment; filename="${attachment.filename}"`,
+          );
           messageLines.push('Content-Transfer-Encoding: base64');
           messageLines.push('');
           // Content should already be base64 from frontend
@@ -706,7 +763,9 @@ export class GmailService {
         await this.getAccessToken(userId);
         return this.sendEmail(userId, to, subject, body, cc, bcc, attachments);
       }
-      throw new InternalServerErrorException(`Failed to send email: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to send email: ${error.message}`,
+      );
     }
   }
 
@@ -714,11 +773,18 @@ export class GmailService {
     userId: number,
     originalMessageId: string,
     body: string,
-    attachments?: Array<{ filename: string; content: string; mimeType: string }>,
+    attachments?: Array<{
+      filename: string;
+      content: string;
+      mimeType: string;
+    }>,
   ): Promise<{ id: string; threadId: string }> {
     try {
       // Get original message
-      const originalMessage = await this.getEmailDetail(userId, originalMessageId);
+      const originalMessage = await this.getEmailDetail(
+        userId,
+        originalMessageId,
+      );
       const gmail = await this.createGmailClient(userId);
 
       // Get full original message for headers
@@ -728,7 +794,9 @@ export class GmailService {
         format: 'full',
       });
 
-      const headers = this.parseEmailHeaders(fullMessage.data.payload?.headers || []);
+      const headers = this.parseEmailHeaders(
+        fullMessage.data.payload?.headers || [],
+      );
       const messageId = headers.messageId || '';
       const references = headers.references || messageId;
 
@@ -770,7 +838,9 @@ export class GmailService {
         await this.getAccessToken(userId);
         return this.replyEmail(userId, originalMessageId, body, attachments);
       }
-      throw new InternalServerErrorException(`Failed to reply email: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to reply email: ${error.message}`,
+      );
     }
   }
 
@@ -779,11 +849,18 @@ export class GmailService {
     originalMessageId: string,
     to: string[],
     body?: string,
-    attachments?: Array<{ filename: string; content: string; mimeType: string }>,
+    attachments?: Array<{
+      filename: string;
+      content: string;
+      mimeType: string;
+    }>,
   ): Promise<{ id: string; threadId: string }> {
     try {
       // Get original message details
-      const originalMessage = await this.getEmailDetail(userId, originalMessageId);
+      const originalMessage = await this.getEmailDetail(
+        userId,
+        originalMessageId,
+      );
       const gmail = await this.createGmailClient(userId);
 
       // Create forwarded message subject
@@ -814,13 +891,15 @@ ${originalMessage.body}
         // Create multipart message with attachments
         const boundary = `boundary_${Date.now()}`;
         const messageLines: string[] = [];
-        
+
         messageLines.push(`To: ${to.join(', ')}`);
         messageLines.push(`Subject: ${encodedSubject}`);
         messageLines.push(`MIME-Version: 1.0`);
-        messageLines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+        messageLines.push(
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        );
         messageLines.push('');
-        
+
         // Add body part
         messageLines.push(`--${boundary}`);
         messageLines.push('Content-Type: text/html; charset=utf-8');
@@ -828,18 +907,20 @@ ${originalMessage.body}
         messageLines.push('');
         messageLines.push(Buffer.from(forwardedBody).toString('base64'));
         messageLines.push('');
-        
+
         // Add attachment parts
         for (const attachment of attachments) {
           messageLines.push(`--${boundary}`);
           messageLines.push(`Content-Type: ${attachment.mimeType}`);
-          messageLines.push(`Content-Disposition: attachment; filename="${attachment.filename}"`);
+          messageLines.push(
+            `Content-Disposition: attachment; filename="${attachment.filename}"`,
+          );
           messageLines.push('Content-Transfer-Encoding: base64');
           messageLines.push('');
           messageLines.push(attachment.content);
           messageLines.push('');
         }
-        
+
         messageLines.push(`--${boundary}--`);
         const message = messageLines.join('\n');
         const encodedMessage = this.encodeMessage(message);
@@ -864,7 +945,9 @@ ${originalMessage.body}
         messageLines.push('Content-Type: text/html; charset=utf-8');
         messageLines.push('Content-Transfer-Encoding: base64');
         messageLines.push('');
-        messageLines.push(Buffer.from(forwardedBody, 'utf-8').toString('base64'));
+        messageLines.push(
+          Buffer.from(forwardedBody, 'utf-8').toString('base64'),
+        );
 
         const message = messageLines.join('\n');
         const encodedMessage = this.encodeMessage(message);
@@ -884,9 +967,17 @@ ${originalMessage.body}
     } catch (error: any) {
       if (error.code === 401) {
         await this.getAccessToken(userId);
-        return this.forwardEmail(userId, originalMessageId, to, body, attachments);
+        return this.forwardEmail(
+          userId,
+          originalMessageId,
+          to,
+          body,
+          attachments,
+        );
       }
-      throw new InternalServerErrorException(`Failed to forward email: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to forward email: ${error.message}`,
+      );
     }
   }
 
@@ -912,11 +1003,17 @@ ${originalMessage.body}
         await this.modifyEmail(userId, messageId, addLabelIds, removeLabelIds);
         return;
       }
-      throw new InternalServerErrorException(`Failed to modify email: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to modify email: ${error.message}`,
+      );
     }
   }
 
-  async deleteEmail(userId: number, messageId: string, permanent: boolean = false): Promise<void> {
+  async deleteEmail(
+    userId: number,
+    messageId: string,
+    permanent: boolean = false,
+  ): Promise<void> {
     try {
       const gmail = await this.createGmailClient(userId);
       if (permanent) {
@@ -936,7 +1033,9 @@ ${originalMessage.body}
         await this.deleteEmail(userId, messageId, permanent);
         return;
       }
-      throw new InternalServerErrorException(`Failed to delete email: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to delete email: ${error.message}`,
+      );
     }
   }
 }

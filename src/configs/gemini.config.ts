@@ -6,4 +6,3 @@ export default registerAs('gemini', () => ({
   maxRetries: parseInt(process.env.GEMINI_MAX_RETRIES || '3', 10),
   timeout: parseInt(process.env.GEMINI_TIMEOUT || '30000', 10),
 }));
-

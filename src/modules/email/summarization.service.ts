@@ -7,7 +7,12 @@ export class SummarizationService {
   private readonly logger = new Logger(SummarizationService.name);
   private apiKeys: string[] = [];
   private modelNames: string[] = [];
-  private combinations: Array<{ apiKey: string; modelName: string; genAI: GoogleGenerativeAI; model: any }> = [];
+  private combinations: Array<{
+    apiKey: string;
+    modelName: string;
+    genAI: GoogleGenerativeAI;
+    model: any;
+  }> = [];
 
   constructor(private configService: ConfigService) {
     const apiKeysString = this.configService.get<string>('GOOGLE_AI_API_KEY');
@@ -16,11 +21,17 @@ export class SummarizationService {
     if (apiKeysString && apiKeysString !== 'YOUR_GOOGLE_AI_API_KEY_HERE') {
       try {
         // Parse comma-separated API keys
-        this.apiKeys = apiKeysString.split(',').map(k => k.trim()).filter(k => k);
-        
+        this.apiKeys = apiKeysString
+          .split(',')
+          .map((k) => k.trim())
+          .filter((k) => k);
+
         // Parse comma-separated model names
-        this.modelNames = modelsString 
-          ? modelsString.split(',').map(m => m.trim()).filter(m => m)
+        this.modelNames = modelsString
+          ? modelsString
+              .split(',')
+              .map((m) => m.trim())
+              .filter((m) => m)
           : ['gemini-2.0-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
 
         // Create all combinations of API keys and models
@@ -65,7 +76,7 @@ export class SummarizationService {
 
     // Increase limit to 4000 characters for better context
     const bodyContent = cleanBody.substring(0, 4000);
-    
+
     const prompt = `Summarize this email in 2-3 clear, complete sentences. Focus on the main points, action items, and key information. Do NOT end your summary with "..." - always provide a complete summary.
 
 Subject: ${emailSubject}
@@ -78,12 +89,12 @@ Provide a complete, actionable summary (do not truncate):`;
     // Try each combination (apiKey + model) until one succeeds
     for (let i = 0; i < this.combinations.length; i++) {
       const combo = this.combinations[i];
-      
+
       try {
         this.logger.log(
           `Attempting summary with API key ${combo.apiKey} and model ${combo.modelName}...`,
         );
-        
+
         const result = await combo.model.generateContent(prompt);
         const response = await result.response;
         const summary = response.text().trim();

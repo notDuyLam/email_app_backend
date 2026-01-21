@@ -50,7 +50,8 @@ export class SemanticSearchDto {
   sender?: string;
 
   @ApiPropertyOptional({
-    description: 'Filter: email status (inbox, todo, in-progress, done, snoozed)',
+    description:
+      'Filter: email status (inbox, todo, in-progress, done, snoozed)',
     example: 'inbox',
   })
   @IsOptional()
@@ -112,4 +113,3 @@ export class SemanticSearchResponseDto {
   @ApiProperty({ description: 'Number of results per page', example: 20 })
   limit: number;
 }
-

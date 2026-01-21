@@ -55,7 +55,6 @@ export class SemanticSearchService {
         return { total: 0, items: [] };
       }
 
-      // Check if pgvector is available
       const hasPgvector = await this.isPgvectorAvailable();
       if (!hasPgvector) {
         this.logger.debug(
@@ -75,7 +74,6 @@ export class SemanticSearchService {
         `[SEMANTIC_SEARCH] User ${userId} searching for: "${searchTerm}" (page: ${page}, limit: ${limit})`,
       );
 
-      // Check how many emails have embeddings for this user
       const embeddingCountResult = await this.dataSource.query(
         `
         SELECT COUNT(*) as count 
@@ -85,7 +83,10 @@ export class SemanticSearchService {
         `,
         [userId],
       );
-      const emailsWithEmbeddings = parseInt(embeddingCountResult[0]?.count || '0', 10);
+      const emailsWithEmbeddings = parseInt(
+        embeddingCountResult[0]?.count || '0',
+        10,
+      );
 
       this.logger.log(
         `[SEMANTIC_SEARCH] User ${userId} has ${emailsWithEmbeddings} emails with embeddings`,
@@ -98,14 +99,12 @@ export class SemanticSearchService {
         return { total: 0, items: [] };
       }
 
-      // Generate embedding for the search query
-      const queryEmbedding = await this.embeddingService.generateEmbedding(searchTerm);
+      const queryEmbedding =
+        await this.embeddingService.generateEmbedding(searchTerm);
 
-      // Pad embedding to 768 dimensions if needed
       const paddedEmbedding = this.padEmbedding(queryEmbedding, 768);
       const embeddingString = `[${paddedEmbedding.join(',')}]`;
 
-      // Build WHERE conditions
       const whereConditions: string[] = [
         'e."userId" = $1',
         'ev.embedding IS NOT NULL',
@@ -132,7 +131,6 @@ export class SemanticSearchService {
 
       const whereClause = whereConditions.join(' AND ');
 
-      // Add limit and offset parameters
       const limitParam = queryParams.length + 1;
       const offsetParam = queryParams.length + 2;
       queryParams.push(limit, offset);
@@ -162,7 +160,6 @@ export class SemanticSearchService {
 
       const results = await this.dataSource.query(vectorQuery, queryParams);
 
-      // Get total count
       const countParams: any[] = [userId];
       const countWhereConditions: string[] = [
         'e."userId" = $1',
@@ -199,17 +196,19 @@ export class SemanticSearchService {
       const countResult = await this.dataSource.query(countQuery, countParams);
       const total = parseInt(countResult[0]?.total || '0', 10);
 
-      // Map results
-      const items: Array<EmailSearchDocument & { score?: number }> = results.map((row: any) => ({
-        id: row.gmailId,
-        subject: row.subject || '',
-        senderName: row.sender_name || '',
-        senderEmail: row.sender_email || '',
-        snippet: row.snippet || '',
-        receivedAt: row.received_at ? new Date(row.received_at).toISOString() : undefined,
-        status: row.status || 'Inbox',
-        score: parseFloat(row.similarity_score || '0'),
-      }));
+      const items: Array<EmailSearchDocument & { score?: number }> =
+        results.map((row: any) => ({
+          id: row.gmailId,
+          subject: row.subject || '',
+          senderName: row.sender_name || '',
+          senderEmail: row.sender_email || '',
+          snippet: row.snippet || '',
+          receivedAt: row.received_at
+            ? new Date(row.received_at).toISOString()
+            : undefined,
+          status: row.status || 'Inbox',
+          score: parseFloat(row.similarity_score || '0'),
+        }));
 
       this.logger.log(
         `[SEMANTIC_SEARCH] Found ${total} results for user ${userId}, returning ${items.length} items`,
@@ -217,7 +216,8 @@ export class SemanticSearchService {
 
       return { total, items };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to perform semantic search: ${errorMessage}`);
       return { total: 0, items: [] };
     }
@@ -238,24 +238,23 @@ export class SemanticSearchService {
         return;
       }
 
-      // Check if pgvector is available
       const hasPgvector = await this.isPgvectorAvailable();
       if (!hasPgvector) {
         this.logger.debug('pgvector not available, skipping embedding storage');
         return;
       }
 
-      // Find the email record
       const email = await this.emailRepository.findOne({
         where: { userId, gmailId },
       });
 
       if (!email) {
-        this.logger.warn(`Email not found for gmailId ${gmailId}, userId ${userId}`);
+        this.logger.warn(
+          `Email not found for gmailId ${gmailId}, userId ${userId}`,
+        );
         return;
       }
 
-      // Combine subject and body for embedding
       const textForEmbedding = `${subject || ''} ${bodyText || ''}`.trim();
 
       if (!textForEmbedding) {
@@ -263,20 +262,17 @@ export class SemanticSearchService {
         return;
       }
 
-      // Generate embedding
-      const embedding = await this.embeddingService.generateEmbedding(textForEmbedding);
+      const embedding =
+        await this.embeddingService.generateEmbedding(textForEmbedding);
 
-      // Pad to 768 dimensions
       const paddedEmbedding = this.padEmbedding(embedding, 768);
       const embeddingString = `[${paddedEmbedding.join(',')}]`;
 
-      // Check if vector record exists
       const existingVector = await this.emailVectorRepository.findOne({
         where: { emailId: email.id },
       });
 
       if (existingVector) {
-        // Update existing vector
         await this.dataSource.query(
           `
           UPDATE email_vectors
@@ -288,7 +284,6 @@ export class SemanticSearchService {
           [embeddingString, email.id],
         );
       } else {
-        // Insert new vector record
         await this.dataSource.query(
           `
           INSERT INTO email_vectors ("emailId", embedding, embedding_updated_at, "createdAt", "updatedAt")
@@ -302,7 +297,8 @@ export class SemanticSearchService {
         `Generated and stored embedding for email ${gmailId} (userId: ${userId})`,
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
 
       if (
         errorMessage.includes('429') ||
@@ -329,7 +325,10 @@ export class SemanticSearchService {
   /**
    * Pad embedding vector to target dimensions
    */
-  private padEmbedding(embedding: number[], targetDimensions: number): number[] {
+  private padEmbedding(
+    embedding: number[],
+    targetDimensions: number,
+  ): number[] {
     if (embedding.length === targetDimensions) {
       return embedding;
     }
@@ -341,7 +340,6 @@ export class SemanticSearchService {
       return embedding.slice(0, targetDimensions);
     }
 
-    // Pad with zeros
     const padding = new Array(targetDimensions - embedding.length).fill(0);
     return [...embedding, ...padding];
   }

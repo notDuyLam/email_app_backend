@@ -24,4 +24,3 @@ export class GmailToken extends BaseEntity {
   @Column({ default: true })
   isActive: boolean;
 }
-

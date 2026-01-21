@@ -24,4 +24,3 @@ export class ModifyEmailDto {
   @IsString({ each: true })
   removeLabelIds?: string[];
 }
-

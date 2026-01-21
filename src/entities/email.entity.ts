@@ -59,6 +59,11 @@ export class Email extends BaseEntity {
   summarizedAt: Date | null;
 
   // Full-text search vector (PostgreSQL tsvector)
-  @Column({ type: 'tsvector', nullable: true, select: false, name: 'search_vector' })
+  @Column({
+    type: 'tsvector',
+    nullable: true,
+    select: false,
+    name: 'search_vector',
+  })
   searchVector: string | null;
 }

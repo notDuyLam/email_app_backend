@@ -1,5 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
+import {
+  IsArray,
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsEmail,
+} from 'class-validator';
 
 class AttachmentDto {
   @ApiProperty({ description: 'Filename of the attachment' })
@@ -34,7 +40,10 @@ export class SendEmailDto {
   @IsNotEmpty()
   subject: string;
 
-  @ApiProperty({ description: 'Email body (HTML or plain text)', example: '<p>Hello World</p>' })
+  @ApiProperty({
+    description: 'Email body (HTML or plain text)',
+    example: '<p>Hello World</p>',
+  })
   @IsString()
   @IsNotEmpty()
   body: string;
@@ -70,4 +79,3 @@ export class SendEmailDto {
   @IsArray()
   attachments?: AttachmentDto[];
 }
-

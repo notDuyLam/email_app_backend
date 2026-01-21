@@ -11,7 +11,10 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import {
+  CurrentUser,
+  CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
 import {
   ApiTags,
   ApiOperation,
@@ -122,7 +125,9 @@ export class AuthController {
   }
 
   @Get('google/authorize')
-  @ApiOperation({ summary: 'Redirect to Google OAuth consent screen for Gmail' })
+  @ApiOperation({
+    summary: 'Redirect to Google OAuth consent screen for Gmail',
+  })
   @ApiResponse({
     status: 302,
     description: 'Redirects to Google OAuth consent screen',
@@ -134,8 +139,16 @@ export class AuthController {
 
   @Get('google/callback')
   @ApiOperation({ summary: 'Handle Google OAuth callback for Gmail' })
-  @ApiQuery({ name: 'code', required: false, description: 'Authorization code from Google' })
-  @ApiQuery({ name: 'error', required: false, description: 'Error from OAuth flow' })
+  @ApiQuery({
+    name: 'code',
+    required: false,
+    description: 'Authorization code from Google',
+  })
+  @ApiQuery({
+    name: 'error',
+    required: false,
+    description: 'Error from OAuth flow',
+  })
   @ApiResponse({
     status: 302,
     description: 'Redirects to frontend with tokens or error',
@@ -148,4 +161,3 @@ export class AuthController {
     return this.authService.handleGmailCallback(code, error, res);
   }
 }
-

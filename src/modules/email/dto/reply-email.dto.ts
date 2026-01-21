@@ -36,4 +36,3 @@ export class ReplyEmailDto {
   @IsArray()
   attachments?: AttachmentDto[];
 }
-

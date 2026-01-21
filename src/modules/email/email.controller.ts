@@ -97,7 +97,9 @@ export class EmailController {
   }
 
   @Post(':id/reindex-search')
-  @ApiOperation({ summary: 'Reindex mailbox emails into Elasticsearch for fuzzy search' })
+  @ApiOperation({
+    summary: 'Reindex mailbox emails into Elasticsearch for fuzzy search',
+  })
   @ApiParam({ name: 'id', description: 'Mailbox ID', example: 'INBOX' })
   @ApiResponse({
     status: 200,

@@ -25,7 +25,8 @@ import { KanbanService } from '../kanban/kanban.service';
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  private refreshTokenPromises: Map<string, Promise<{ accessToken: string }>> = new Map();
+  private refreshTokenPromises: Map<string, Promise<{ accessToken: string }>> =
+    new Map();
   private googleClient: OAuth2Client;
 
   constructor(
@@ -116,9 +117,7 @@ export class AuthService {
     refreshToken: string,
   ): Promise<{ accessToken: string }> {
     try {
-      const refreshSecret = this.configService.get<string>(
-        'jwt.refreshSecret',
-      );
+      const refreshSecret = this.configService.get<string>('jwt.refreshSecret');
       const payload = this.jwtService.verify(refreshToken, {
         secret: refreshSecret,
       });
@@ -164,7 +163,9 @@ export class AuthService {
 
     return this.jwtService.sign(payload, {
       secret: this.configService.get<string>('jwt.accessSecret'),
-      expiresIn: this.configService.get<string>('jwt.accessExpiresIn') as StringValue,
+      expiresIn: this.configService.get<string>(
+        'jwt.accessExpiresIn',
+      ) as StringValue,
     });
   }
 
@@ -176,7 +177,9 @@ export class AuthService {
 
     return this.jwtService.sign(payload, {
       secret: this.configService.get<string>('jwt.refreshSecret'),
-      expiresIn: this.configService.get<string>('jwt.refreshExpiresIn') as StringValue,
+      expiresIn: this.configService.get<string>(
+        'jwt.refreshExpiresIn',
+      ) as StringValue,
     });
   }
 
@@ -242,7 +245,9 @@ export class AuthService {
     error: string | undefined,
     res: Response,
   ): Promise<void> {
-    const frontendUrl = this.configService.get<string>('gmail.frontendUrl') || 'http://localhost:5173';
+    const frontendUrl =
+      this.configService.get<string>('gmail.frontendUrl') ||
+      'http://localhost:5173';
 
     if (error) {
       res.redirect(`${frontendUrl}/login?error=access_denied`);
@@ -315,4 +320,3 @@ export class AuthService {
     }
   }
 }
-

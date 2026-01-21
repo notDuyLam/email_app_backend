@@ -3,7 +3,7 @@ import { registerAs } from '@nestjs/config';
 export default registerAs('gmail', () => {
   const port = process.env.PORT || '3000';
   const defaultRedirectUri = `http://localhost:${port}/api/auth/google/callback`;
-  
+
   return {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
@@ -18,4 +18,3 @@ export default registerAs('gmail', () => {
     ],
   };
 });
-

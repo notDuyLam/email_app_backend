@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { KanbanColumn } from '../../entities/kanban-column.entity';
@@ -9,7 +14,6 @@ import {
   KanbanColumnResponseDto,
 } from './dto/kanban-column.dto';
 
-// Default columns that are created for new users
 export const DEFAULT_KANBAN_COLUMNS = [
   { name: 'Inbox', order: 0, isDefault: true },
   { name: 'To Do', order: 1, isDefault: true },
@@ -29,9 +33,6 @@ export class KanbanService {
     private readonly dataSource: DataSource,
   ) {}
 
-  /**
-   * Get all kanban columns for a user
-   */
   async getColumns(userId: number): Promise<KanbanColumnResponseDto[]> {
     const columns = await this.kanbanColumnRepository.find({
       where: { userId },
@@ -42,10 +43,10 @@ export class KanbanService {
     return columns.map((col) => this.mapToResponse(col));
   }
 
-  /**
-   * Get a single kanban column by ID
-   */
-  async getColumnById(userId: number, columnId: number): Promise<KanbanColumnResponseDto> {
+  async getColumnById(
+    userId: number,
+    columnId: number,
+  ): Promise<KanbanColumnResponseDto> {
     const column = await this.kanbanColumnRepository.findOne({
       where: { id: columnId, userId },
       relations: ['label'],
@@ -58,32 +59,26 @@ export class KanbanService {
     return this.mapToResponse(column);
   }
 
-  /**
-   * Get the default "Inbox" column for a user (used when no column is specified)
-   */
   async getDefaultColumn(userId: number): Promise<KanbanColumn | null> {
     return this.kanbanColumnRepository.findOne({
       where: { userId, name: 'Inbox', isDefault: true },
     });
   }
 
-  /**
-   * Create a new kanban column
-   */
   async createColumn(
     userId: number,
     dto: CreateKanbanColumnDto,
   ): Promise<KanbanColumnResponseDto> {
-    // Check if column with same name already exists
     const existing = await this.kanbanColumnRepository.findOne({
       where: { userId, name: dto.name },
     });
 
     if (existing) {
-      throw new BadRequestException(`Column with name "${dto.name}" already exists`);
+      throw new BadRequestException(
+        `Column with name "${dto.name}" already exists`,
+      );
     }
 
-    // Get max order if not specified
     let order = dto.order;
     if (order === undefined) {
       const maxOrderResult = await this.kanbanColumnRepository
@@ -108,9 +103,6 @@ export class KanbanService {
     return this.mapToResponse(saved);
   }
 
-  /**
-   * Update a kanban column
-   */
   async updateColumn(
     userId: number,
     columnId: number,
@@ -124,18 +116,18 @@ export class KanbanService {
       throw new NotFoundException(`Column with ID ${columnId} not found`);
     }
 
-    // Check for name conflicts if name is being changed
     if (dto.name && dto.name !== column.name) {
       const existing = await this.kanbanColumnRepository.findOne({
         where: { userId, name: dto.name },
       });
 
       if (existing) {
-        throw new BadRequestException(`Column with name "${dto.name}" already exists`);
+        throw new BadRequestException(
+          `Column with name "${dto.name}" already exists`,
+        );
       }
     }
 
-    // Update fields
     if (dto.name !== undefined) column.name = dto.name;
     if (dto.order !== undefined) column.order = dto.order;
     if (dto.labelId !== undefined) column.labelId = dto.labelId;
@@ -143,7 +135,6 @@ export class KanbanService {
     const saved = await this.kanbanColumnRepository.save(column);
     this.logger.log(`Updated kanban column ${columnId} for user ${userId}`);
 
-    // Fetch with label relation
     const updated = await this.kanbanColumnRepository.findOne({
       where: { id: saved.id },
       relations: ['label'],
@@ -152,9 +143,6 @@ export class KanbanService {
     return this.mapToResponse(updated!);
   }
 
-  /**
-   * Delete a kanban column
-   */
   async deleteColumn(userId: number, columnId: number): Promise<void> {
     const column = await this.kanbanColumnRepository.findOne({
       where: { id: columnId, userId },
@@ -168,7 +156,6 @@ export class KanbanService {
       throw new BadRequestException('Cannot delete default columns');
     }
 
-    // Move emails in this column to Inbox before deleting
     const inboxColumn = await this.getDefaultColumn(userId);
     if (inboxColumn) {
       await this.dataSource.query(
@@ -181,11 +168,10 @@ export class KanbanService {
     this.logger.log(`Deleted kanban column ${columnId} for user ${userId}`);
   }
 
-  /**
-   * Reorder columns
-   */
-  async reorderColumns(userId: number, columnIds: number[]): Promise<KanbanColumnResponseDto[]> {
-    // Verify all columns belong to user
+  async reorderColumns(
+    userId: number,
+    columnIds: number[],
+  ): Promise<KanbanColumnResponseDto[]> {
     const columns = await this.kanbanColumnRepository.find({
       where: { userId },
     });
@@ -194,11 +180,12 @@ export class KanbanService {
 
     for (const id of columnIds) {
       if (!columnMap.has(id)) {
-        throw new BadRequestException(`Column ${id} not found or does not belong to user`);
+        throw new BadRequestException(
+          `Column ${id} not found or does not belong to user`,
+        );
       }
     }
 
-    // Update orders
     const updates = columnIds.map((id, index) => {
       const column = columnMap.get(id)!;
       column.order = index;
@@ -211,14 +198,15 @@ export class KanbanService {
     return this.getColumns(userId);
   }
 
-  /**
-   * Create default columns for a new user
-   */
   async createDefaultColumnsForUser(userId: number): Promise<void> {
-    const existing = await this.kanbanColumnRepository.count({ where: { userId } });
-    
+    const existing = await this.kanbanColumnRepository.count({
+      where: { userId },
+    });
+
     if (existing > 0) {
-      this.logger.log(`User ${userId} already has kanban columns, skipping default creation`);
+      this.logger.log(
+        `User ${userId} already has kanban columns, skipping default creation`,
+      );
       return;
     }
 
@@ -232,12 +220,11 @@ export class KanbanService {
     );
 
     await this.kanbanColumnRepository.save(columns);
-    this.logger.log(`Created ${columns.length} default kanban columns for user ${userId}`);
+    this.logger.log(
+      `Created ${columns.length} default kanban columns for user ${userId}`,
+    );
   }
 
-  /**
-   * Map entity to response DTO
-   */
   private mapToResponse(column: KanbanColumn): KanbanColumnResponseDto {
     return {
       id: column.id,
