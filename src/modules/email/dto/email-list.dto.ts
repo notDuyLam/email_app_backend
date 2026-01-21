@@ -7,6 +7,7 @@ export class EmailListItemDto {
   isStarred: boolean;
   isRead: boolean;
   snoozedUntil?: Date | null;
+  hasAttachments?: boolean;
 }
 
 export class EmailListResponseDto {

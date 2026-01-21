@@ -65,7 +65,9 @@ export class EmailService {
   /**
    * Get default Inbox column for a user
    */
-  private async getDefaultInboxColumn(userId: number): Promise<KanbanColumn | null> {
+  private async getDefaultInboxColumn(
+    userId: number,
+  ): Promise<KanbanColumn | null> {
     return this.kanbanColumnRepository.findOne({
       where: { userId, name: 'Inbox', isDefault: true },
     });
@@ -74,7 +76,10 @@ export class EmailService {
   /**
    * Get column by name for a user
    */
-  private async getColumnByName(userId: number, name: string): Promise<KanbanColumn | null> {
+  private async getColumnByName(
+    userId: number,
+    name: string,
+  ): Promise<KanbanColumn | null> {
     return this.kanbanColumnRepository.findOne({
       where: { userId, name },
     });
@@ -111,7 +116,7 @@ export class EmailService {
     // Get emails from our database to check snooze status
     let emailMap = new Map<string, Email>();
     let snoozeMap = new Map<number, SnoozeSchedule>();
-    
+
     if (gmailIds.length > 0) {
       const emails = await this.emailRepository.find({
         where: { gmailId: In(gmailIds), userId },
@@ -135,7 +140,11 @@ export class EmailService {
     }
 
     // Collect emails for bulk embedding generation
-    const emailsForBulkIndex: Array<{ id: string; detail: any; email?: Email }> = [];
+    const emailsForBulkIndex: Array<{
+      id: string;
+      detail: any;
+      email?: Email;
+    }> = [];
 
     // Fetch details for each message
     const emailDetails = await Promise.all(
@@ -165,6 +174,7 @@ export class EmailService {
             isStarred: detail.isStarred,
             isRead: detail.isRead,
             snoozedUntil: snooze?.snoozeUntil || null,
+            hasAttachments: detail.attachments && detail.attachments.length > 0,
           } as EmailListItemDto;
         } catch (error) {
           return {
@@ -221,6 +231,7 @@ export class EmailService {
       isStarred: false,
       isRead: item.status !== 'Inbox',
       snoozedUntil: null,
+      hasAttachments: false, // Search index doesn't currently support attachments
     }));
 
     return {
@@ -356,7 +367,9 @@ export class EmailService {
         where: { gmailId: In(gmailIds), userId },
         relations: ['kanbanColumn'],
       });
-      const emailMap = new Map<string, Email>(emails.map((e) => [e.gmailId, e]));
+      const emailMap = new Map<string, Email>(
+        emails.map((e) => [e.gmailId, e]),
+      );
 
       const docs: EmailSearchDocument[] = [];
       for (const msg of messages) {
@@ -536,7 +549,7 @@ export class EmailService {
 
     // Find or determine the target column
     let targetColumn: KanbanColumn | null = null;
-    
+
     if (typeof statusOrColumnId === 'number') {
       // Direct column ID
       targetColumn = await this.kanbanColumnRepository.findOne({
@@ -545,15 +558,15 @@ export class EmailService {
     } else {
       // Column name (for backwards compatibility)
       targetColumn = await this.getColumnByName(userId, statusOrColumnId);
-      
+
       // If not found, try to match legacy status names
       if (!targetColumn) {
         const legacyMapping: Record<string, string> = {
-          'inbox': 'Inbox',
-          'todo': 'To Do',
+          inbox: 'Inbox',
+          todo: 'To Do',
           'in-progress': 'In Progress',
-          'done': 'Done',
-          'snoozed': 'Inbox', // Snoozed emails stay in their column, snooze is tracked separately
+          done: 'Done',
+          snoozed: 'Inbox', // Snoozed emails stay in their column, snooze is tracked separately
         };
         const mappedName = legacyMapping[statusOrColumnId.toLowerCase()];
         if (mappedName) {
@@ -600,7 +613,7 @@ export class EmailService {
       try {
         const addLabelIds = gmailLabelId ? [gmailLabelId] : [];
         const removeLabelIds = oldGmailLabelId ? [oldGmailLabelId] : [];
-        
+
         if (addLabelIds.length > 0 || removeLabelIds.length > 0) {
           await this.gmailService.modifyEmail(
             userId,
